@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "타마코레 한글화",
+  "version": "0.1.0",
+  "description": "타마코레의 대사와 UI를 한국어로 표시합니다. GitHub에서 한글 리소스를 업데이트합니다.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "https://nijitama.app/games/tamacolle/index*.html",
+    "https://api.github.com/*",
+    "https://github.com/*",
+    "https://release-assets.githubusercontent.com/*",
+    "https://objects.githubusercontent.com/*"
+  ],
+  "background": {"service_worker": "background.mjs", "type": "module"},
+  "action": {
+    "default_title": "타마코레 한글화",
+    "default_popup": "popup.html",
+    "default_icon": {"16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png"}
+  },
+  "icons": {"16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png"},
+  "content_scripts": [
+    {
+      "matches": ["https://nijitama.app/games/tamacolle/index*.html"],
+      "js": ["image-policy.js", "game-adapter.js", "dialogue-text.js", "name-policy.js", "story-policy.js", "main.js"],
+      "world": "MAIN",
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://nijitama.app/games/tamacolle/index*.html"],
+      "js": ["content.js"],
+      "world": "ISOLATED",
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}
+}
