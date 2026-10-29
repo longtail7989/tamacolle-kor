@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'resource-v*'
+  workflow_dispatch:
+    inputs:
+      resource_tag:
+        description: Existing resource-vx.y.z tag to publish
+        required: true
+        default: resource-v1.0.0
 
 permissions:
   contents: write
@@ -15,24 +21,28 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.resource_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Test resource updates and live runtime behavior
         run: node --test tests/resources.mjs tests/runtime.mjs
       - name: Build deterministic allowlisted artifacts
-        run: node scripts/build.mjs --tag "$GITHUB_REF_NAME"
+        run: node scripts/build.mjs --tag "$RELEASE_TAG"
       - name: Publish ZIP, single JSON resource pack and checksums
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             dist/tamacolle-kor-*-extension.zip \
             dist/tamacolle-kor-resources.json \
             dist/SHA256SUMS \
             --verify-tag \
-            --title "한국어 리소스 ${GITHUB_REF_NAME#resource-v}" \
+            --title "한국어 리소스 ${RELEASE_TAG#resource-v}" \
             --notes '한국어 읽기 전용 확장 ZIP, 텍스트·PNG 통합 리소스 JSON, SHA-256 체크섬입니다. 설치 및 검증 범위는 저장소 README를 확인하세요. 코드 변경은 확장 재로드가 필요합니다.'
