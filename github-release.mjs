@@ -57,30 +57,34 @@ function checkFinalURL(response, requested, asset = false) {
   if (!asset || url.protocol !== 'https:' || url.hostname !== 'release-assets.githubusercontent.com' || url.port || url.username || url.password) throw problem('예상하지 않은 다운로드 리디렉션입니다.');
 }
 
+export function fetchLatestGitHubRelease(fetchImpl = globalThis.fetch) {
+  return withDeadline(30000, async signal => {
+    const response = await fetchImpl(API, {credentials: 'omit', redirect: 'error', cache: 'no-store', headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}, signal});
+    checkFinalURL(response, API);
+    if (response.status === 404) return null;
+    if (!response.ok) throw problem(`GitHub 릴리스를 확인하지 못했습니다 (HTTP ${response.status}).`);
+    const bytes = await boundedBytes(response, 2 * 1024 * 1024, signal);
+    try { return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
+    catch { throw problem('GitHub 릴리스 응답이 올바른 JSON이 아닙니다.'); }
+  });
+}
+
 export function createGitHubUpdater({fetchImpl = globalThis.fetch, getCurrent, apply, extensionVersion = '0.1.0'} = {}) {
   if (typeof fetchImpl !== 'function' || typeof getCurrent !== 'function' || typeof apply !== 'function') throw problem('업데이트 초기화 정보가 없습니다.');
   compareVersions(extensionVersion, extensionVersion);
-  let inFlight = null;
+  let inFlight = null, latestVersion;
   async function check() {
+    latestVersion = undefined;
     try {
       const current = await getCurrent();
       if (!current || typeof current.version !== 'string') throw problem('현재 리소스 버전을 읽지 못했습니다.');
       compareVersions(current.version, current.version);
-      const release = await withDeadline(30000, async signal => {
-        const response = await fetchImpl(API, {credentials: 'omit', redirect: 'error', cache: 'no-store', headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}, signal});
-        checkFinalURL(response, API);
-        if (response.status === 404) return null;
-        if (!response.ok) throw problem(`GitHub 릴리스를 확인하지 못했습니다 (HTTP ${response.status}).`);
-        const bytes = await boundedBytes(response, 2 * 1024 * 1024, signal);
-        try { return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
-        catch { throw problem('GitHub 릴리스 응답이 올바른 JSON이 아닙니다.'); }
-      });
-      if (!release || release.draft === true || release.prerelease === true) return {status: 'unpublished', version: current.version};
+      const release = await fetchLatestGitHubRelease(fetchImpl);
+      if (!release || release.draft === true || release.prerelease === true) { latestVersion = ''; return {status: 'unpublished', version: current.version}; }
       if (release.draft !== false || release.prerelease !== false || typeof release.tag_name !== 'string' || !/^resource-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(release.tag_name)) throw problem('리소스 릴리스 태그가 올바르지 않습니다.');
       const version = release.tag_name.slice('resource-v'.length), releaseUrl = `${RELEASES}tag/${release.tag_name}`;
       if (release.html_url !== releaseUrl) throw problem('공식 저장소의 릴리스 주소가 아닙니다.');
       const order = compareVersions(version, current.version);
-      if (order < 0) throw problem('현재보다 이전 버전으로 되돌릴 수 없습니다.');
       if (!Array.isArray(release.assets)) throw problem('리소스 릴리스 파일 목록이 없습니다.');
       const matches = release.assets.filter(asset => asset && asset.name === ASSET);
       if (matches.length !== 1) throw problem('리소스 릴리스 파일이 없거나 중복되었습니다.');
@@ -88,6 +92,8 @@ export function createGitHubUpdater({fetchImpl = globalThis.fetch, getCurrent, a
       if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_PACK_BYTES) throw problem('리소스 릴리스 파일 크기가 제한을 초과했습니다.');
       if (typeof asset.digest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(asset.digest)) throw problem('GitHub SHA256 무결성 정보가 없습니다.');
       const expectedHash = asset.digest.slice(7);
+      latestVersion = version;
+      if (order < 0) throw problem('현재보다 이전 버전으로 되돌릴 수 없습니다.');
       if (order === 0) {
         // The release builder emits exactly this canonical representation. Detect
         // an unchanged release before downloading the large text/PNG bundle.
@@ -107,7 +113,7 @@ export function createGitHubUpdater({fetchImpl = globalThis.fetch, getCurrent, a
       catch (error) {
         if (error?.code === 'REQUIRES_EXTENSION') {
           if (error.version !== version) throw problem('리소스 버전과 릴리스 태그가 일치하지 않습니다.');
-          return {status: 'requires-extension', version, releaseUrl};
+          return {status: 'requires-extension', version, minimumExtensionVersion: error.minimumExtensionVersion, releaseUrl};
         }
         throw error;
       }
@@ -129,6 +135,7 @@ export function createGitHubUpdater({fetchImpl = globalThis.fetch, getCurrent, a
     }
   }
   return {
+    get latestVersion() { return latestVersion; },
     checkAndUpdate() {
       if (!inFlight) {
         const task = check();

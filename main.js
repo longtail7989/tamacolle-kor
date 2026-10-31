@@ -8,20 +8,48 @@ const storyPolicy=window[Symbol.for('tamacolle-kor-story-policy.v1')];if(!storyP
 let config={enabled:false,configured:false,cacheEnabled:true,cacheOnly:true,target:'한국어',translateLatin:true,fontFamily:'Malgun Gothic'},engine=null,sequence=0,busy=false,stopped=false,disposed=false,epoch=0,bridgeGeneration=-1,catalogVersion=null;
 const records=new Map(),byRequest=new Map(),hooks=[],translations=new Map(),engineEvents=[];let translationBytes=0;
 let heartbeat=null,lightTimer=null,burstTimer=null,burstUntil=0,lastScan=0,lastLight=0,attachAttempts=0;
-function recalled(key){const text=translations.get(key);if(text!==undefined){translations.delete(key);translations.set(key,text);}return text;}
-const memorySize=(key,value)=>(key.length+value.text.length+value.cacheSource.length)*2;
-function remember(key,text,cacheSource=key){const old=translations.get(key);if(old!==undefined){translationBytes-=memorySize(key,old);translations.delete(key);}const value={text,cacheSource};translations.set(key,value);translationBytes+=memorySize(key,value);while(translations.size>5000||translationBytes>8*1024*1024){const first=translations.keys().next().value;translationBytes-=memorySize(first,translations.get(first));translations.delete(first);}}
+function recalled(key,provenance='[]'){const text=translations.get(key);if(text!==undefined){if(text.provenance!==provenance)return undefined;translations.delete(key);translations.set(key,text);}return text;}
+const memorySize=(key,value)=>(key.length+value.text.length+value.cacheSource.length+value.provenance.length)*2;
+function remember(key,text,cacheSource=key,provenance='[]'){const old=translations.get(key);if(old!==undefined){translationBytes-=memorySize(key,old);translations.delete(key);}const value={text,cacheSource,provenance};translations.set(key,value);translationBytes+=memorySize(key,value);while(translations.size>5000||translationBytes>8*1024*1024){const first=translations.keys().next().value;translationBytes-=memorySize(first,translations.get(first));translations.delete(first);}}
 function clearMemory(){translations.clear();translationBytes=0;}
 const emit=(type,payload={})=>window.postMessage({channel:CHANNEL,from:'engine',type,version:catalogVersion,generation:bridgeGeneration,...payload},location.origin);
 const game=window[Symbol.for('tamacolle-kor-game-adapter.v1')].create({getEngine:()=>engine,nativeText:label=>records.get(label)?.native??actual(label)});
 const story=storyPolicy.create({getEngine:()=>engine,getRecords:()=>records,game});
 const images=globalThis[Symbol.for('tamacolle-kor-image-policy.v1')].create({getEngine:()=>engine,getConfig:()=>config,emit});
+const nativeTemplates=globalThis[Symbol.for('tamacolle-kor-native-template-policy.v1')].create({getEngine:()=>engine,game,dialogue,namesPolicy,getNames:()=>game.names()});
+function syncNative(label,r){const candidates=nativeTemplates.candidates(r.raw,r.context,label),provenance=JSON.stringify(candidates);if(r.nativeProvenance!==provenance){if(r.nativeProvenance!==undefined){reset(r);const old=translations.get(r.raw);if(old){translationBytes-=memorySize(r.raw,old);translations.delete(r.raw);}if(valid(label)&&actual(label)===r.display)display(label,r,r.native);}r.nativeProvenance=provenance;r.nativeTemplates=candidates;}return provenance;}
 const valid=x=>!!x&&(!window.cc?.isValid||window.cc.isValid(x));
 const candidate=text=>typeof text==='string'&&text.trim()&&text.length<=8192&&(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))||(config.translateLatin&&/[A-Za-z]/.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))));
 function choices(raw){return namesPolicy.candidates(raw,playerNames);}
 function boundSource(r,source){const candidates=[r.raw,...choices(r.raw).map(x=>x.source)];return candidates.includes(source)||(dialogue.isStory(r.context)&&candidates.some(x=>dialogue.equivalent(x,source)));}
-function rendered(r,text,source){if(!text.includes('{USER}'))return text;const alternatives=choices(r.raw),name=alternatives.find(x=>x.source===source||(dialogue.isStory(r.context)&&dialogue.equivalent(x.source,source)))?.name||(source===r.raw?alternatives[0]?.name:null)||(r.raw.includes('{USER}')?playerNames[0]:null);return namesPolicy.render(text,name);}
+function rendered(r,text,source){if(text.includes('{TAMACOLLE_ACTOR_'))return null;if(!text.includes('{USER}'))return text;const alternatives=choices(r.raw),name=alternatives.find(x=>x.source===source||(dialogue.isStory(r.context)&&dialogue.equivalent(x.source,source)))?.name||(source===r.raw?alternatives[0]?.name:null)||(r.raw.includes('{USER}')?playerNames[0]:null);return namesPolicy.render(text,name);}
 function applyText(label,r,text,source=r.raw){if(!boundSource(r,source))return false;const value=rendered(r,text,source);if(value===null)return false;r.templateText=text;r.cacheSource=source;const exact=source===r.raw||choices(r.raw).some(x=>x.source===source),positional=r.context==='TamacolleDialogue'||r.context==='TamacolleChoice';r.fullDisplay=exact&&!positional?value:dialogue.display(r.raw,value,positional);const projected=story.reveal(label,r.native,r.fullDisplay);r.displayComplete=projected===r.fullDisplay;display(label,r,projected);return true;}
+const nativeProtocol=globalThis[Symbol.for('tamacolle-kor-native-template-protocol.v1')];
+const usableResultName=text=>typeof text==='string'&&!!text.trim()&&text.length<=512&&!/[<>{}\r\n]/.test(text);
+function applyResultNames(label,r,batch){
+ const text=nativeProtocol.bind(batch.candidate.source,batch.candidate,batch.values);if(text===null)return false;
+ for(const id of batch.requests)byRequest.delete(id);r.nameBatch=null;r.requested=r.raw;r.resolved=true;
+ return applyText(label,r,text,r.raw);
+}
+function askResultNames(label,r,candidate){
+ const batch={candidate,signature:JSON.stringify(candidate),values:new Map(),requests:new Set()},sources=new Set(candidate.bindings.map(binding=>binding.source));
+ r.nameBatch=batch;r.requested=r.raw;r.resolved=false;
+ for(const source of sources){const cached=recalled(source);if(cached?.cacheSource===source&&usableResultName(cached.text))batch.values.set(source,cached.text);}
+ if(applyResultNames(label,r,batch))return;
+ for(const source of sources)if(!batch.values.has(source)){
+  const id='e'+epoch+'r'+(++sequence);batch.requests.add(id);byRequest.set(id,{label,r,nameSource:source,nameSignature:batch.signature});
+  emit('CANDIDATE',{item:{id,source,context:'TamacolleResultName'}});
+ }
+}
+function resultNameReply(result,{label,r,nameSource,nameSignature}){
+ const batch=r.nameBatch;if(!batch||batch.signature!==nameSignature||!batch.requests.has(result.id)||r.requested!==r.raw||!valid(label))return;
+ const now=actual(label);if(now!==r.display&&now!==r.native){update(label,now);return;}
+ const current=game.resultNames(label,r.native);if(!current||JSON.stringify(current)!==nameSignature||story.source(label,r.native)!==r.raw){reset(r);return;}
+ byRequest.delete(result.id);batch.requests.delete(result.id);
+ const source=typeof result.cacheSource==='string'?result.cacheSource:nameSource;
+ if(result.missing===true||source!==nameSource||!usableResultName(result.text)||JSON.stringify(result.nativeTemplates||[])!=='[]')return;
+ batch.values.set(nameSource,result.text);remember(nameSource,result.text,nameSource);applyResultNames(label,r,batch);
+}
 function readNames(){const names=game.names().filter(namesPolicy.usable);if(names.length===playerNames.length&&names.every((name,i)=>name===playerNames[i]))return;playerNames=names;epoch++;clearMemory();for(const [label,r]of records){reset(r);if(valid(label)&&actual(label)===r.display)display(label,r,r.native);}}
 function active(label){return valid(label)&&label.node?.activeInHierarchy!==false&&!game.excluded(label);}
 function safeType(label){return label instanceof engine.Label||label instanceof engine.RichText;}
@@ -29,7 +57,7 @@ function richChild(label){if(!(label instanceof engine.Label))return false;let n
 function hook(label){return hooks.find(h=>h.proto.isPrototypeOf(label));}
 function nativeSet(label,value){const h=hook(label);if(!h)throw Error('지원되지 않는 텍스트 접근자');h.before.set.call(label,value);}
 function actual(label){const h=hook(label);return h?h.before.get.call(label):label.string;}
-const styleKeys=['font','fontFamily','useSystemFont','fontSize','lineHeight','cacheMode','enableWrapText','overflow'];
+const styleKeys=['font','fontFamily','useSystemFont','fontSize','lineHeight','cacheMode','enableWrapText','overflow','horizontalAlign'];
 function display(label,r,text){if(text.includes('{USER}'))text=rendered(r,text,r.cacheSource||r.raw)??r.native.replace(/\{USER\}/g,'');busy=true;try{
  if(config.enabled&&!disposed&&!stopped)text=game.bookNumber(label,r.native,config.target)??text;
  game.display(label,text!==r.native);
@@ -39,23 +67,40 @@ function display(label,r,text){if(text.includes('{USER}'))text=rendered(r,text,r
   if('enableWrapText' in label&&'overflow' in label){
    if(r.context==='TamacolleDialogue'){desired.enableWrapText=true;desired.overflow=engine.Label.Overflow.SHRINK;}
    else if(r.context==='TamacolleChoice'){desired.enableWrapText=false;desired.overflow=engine.Label.Overflow.SHRINK;}
+   else if(r.context==='TamacolleTitle'){
+    desired.enableWrapText=false;desired.overflow=engine.Label.Overflow.NONE;desired.fontSize=r.style.fontSize;
+    const width=engine.view?.getDesignResolutionSize?.()?.width;
+    if(label!==game.bind().scenario?.subTitleLabel&&width>0){
+     const columns=Math.max(...text.split('\n').map(row=>Array.from(row).length));
+     if(columns)desired.fontSize=Math.max(1,Math.min(r.style.fontSize,Math.floor(width*0.8/columns)));
+    }
+   }
+   else if(r.context==='TamacolleResultNames'){
+    desired.enableWrapText=false;desired.overflow=engine.Label.Overflow.NONE;desired.fontSize=r.style.fontSize;desired.horizontalAlign=0;
+    const node=label.node;
+    if(!r.nameGeometry&&Number.isFinite(node.anchorX))r.nameGeometry={anchorX:node.anchorX};
+    node.anchorX=0;
+   }
   }
   for(const [k,v]of Object.entries(desired))if(k in label&&label[k]!==v)label[k]=v;
  }
+ if(text===r.native&&r.nameGeometry){Object.assign(label.node,r.nameGeometry);r.nameGeometry=null;}
  if(text===r.native&&r.style){for(const [k,v]of Object.entries(r.style))if(label[k]!==v)label[k]=v;r.style=null;}
  if(actual(label)!==text)nativeSet(label,text);r.display=text;
  }finally{busy=false;}}
-function reset(r){if(r.requestId)byRequest.delete(r.requestId);r.requested=null;r.requestId=null;r.resolved=false;r.templateText=null;r.cacheSource=null;r.fullDisplay=null;r.displayComplete=false;r.typingPlan=null;}
+function reset(r){if(r.requestId)byRequest.delete(r.requestId);for(const id of r.nameBatch?.requests||[])byRequest.delete(id);r.nameBatch=null;r.requested=null;r.requestId=null;r.resolved=false;r.templateText=null;r.cacheSource=null;r.fullDisplay=null;r.displayComplete=false;r.typingPlan=null;}
 function context(label){const role=game.context(label);if(role)return role;const names=[];let n=label.node,depth=0;while(n&&depth++<5){for(const c of n._components||[]){const name=engine.js?.getClassName?.(c)||'';if(name&&name!=='cc.Label'&&name!=='cc.RichText')names.push(name.slice(0,55));}n=n.parent;}return [...new Set(names)].slice(0,5).join(' / ').slice(0,280);}
-function ask(label,r){if(!config.enabled||!config.configured||stopped||!active(label)||game.pending(label)||richChild(label)||game.bookNumber(label,r.native,config.target)!==null||(!candidate(r.raw)&&r.raw!=='{USER}'&&!choices(r.raw).length)||r.requested===r.raw)return;
- const cached=recalled(r.raw);if(cached!==undefined&&applyText(label,r,cached.text,cached.cacheSource)){r.requested=r.raw;r.resolved=true;return;}
- const alternatives=choices(r.raw);r.requested=r.raw;r.resolved=false;r.requestId='e'+epoch+'r'+(++sequence);byRequest.set(r.requestId,{label,r});const id=r.requestId,item={id,source:r.raw,context:context(label),...(alternatives.length?{templates:alternatives.map(x=>x.source)}:{})};
+function ask(label,r){syncNative(label,r);if(!config.enabled||!config.configured||stopped||(!active(label)&&!game.allowInactive(label))||game.pending(label)||richChild(label)||game.bookNumber(label,r.native,config.target)!==null||(!candidate(r.raw)&&r.raw!=='{USER}'&&!choices(r.raw).length)||r.requested===r.raw)return;
+ const cached=recalled(r.raw,r.nativeProvenance);if(cached!==undefined&&applyText(label,r,cached.text,cached.cacheSource)){r.requested=r.raw;r.resolved=true;return;}
+ const resultNames=game.resultNames(label,r.native);if(resultNames){askResultNames(label,r,resultNames);return;}
+ const alternatives=choices(r.raw);r.requested=r.raw;r.resolved=false;r.requestId='e'+epoch+'r'+(++sequence);byRequest.set(r.requestId,{label,r,provenance:r.nativeProvenance});const id=r.requestId,item={id,source:r.raw,context:context(label),...(alternatives.length?{templates:alternatives.map(x=>x.source)}:{}),...(r.nativeTemplates.length?{nativeTemplates:r.nativeTemplates}:{})};
  emit('CANDIDATE',{item});
 }
 function update(label,native,{preserve=false}={}){if(!safeType(label)||richChild(label))return nativeSet(label,native);if(game.excluded(label)){const old=records.get(label);if(old){display(label,old,old.native);reset(old);records.delete(label);}return nativeSet(label,native);}native=typeof native==='string'?native:String(native);let r=records.get(label);if(r&&r.resolved&&native===r.display&&r.display!==r.native&&story.source(label,r.native)===r.raw){native=r.native;preserve=true;}const raw=story.source(label,native);if(!r){r={raw,native,display:native,fullDisplay:null,displayComplete:false,typingPlan:null,requested:null,requestId:null,style:null,resolved:false,wasActive:active(label)};records.set(label,r);}else if(raw!==r.raw){reset(r);r.raw=raw;preserve=false;}
  r.context=context(label);
+ syncNative(label,r);
  r.native=native;
- const cached=config.enabled&&config.configured?recalled(raw):undefined;const currentOccurrence=config.enabled&&config.configured&&r.resolved&&r.requested===raw&&typeof r.templateText==='string';if(cached!==undefined&&boundSource(r,cached.cacheSource)&&applyText(label,r,cached.text,cached.cacheSource)){r.requested=raw;r.resolved=true;}else if(currentOccurrence)applyText(label,r,r.templateText,r.cacheSource);else if(!preserve||r.display===native)display(label,r,config.enabled?game.localizeManor(label,native,config.target)??game.localizeRecord(label,native,config.target)??native:native);ask(label,r);
+ const cached=config.enabled&&config.configured?recalled(raw,r.nativeProvenance):undefined;const currentOccurrence=config.enabled&&config.configured&&r.resolved&&r.requested===raw&&typeof r.templateText==='string';if(cached!==undefined&&boundSource(r,cached.cacheSource)&&applyText(label,r,cached.text,cached.cacheSource)){r.requested=raw;r.resolved=true;}else if(currentOccurrence)applyText(label,r,r.templateText,r.cacheSource);else if(!preserve||r.display===native)display(label,r,config.enabled?game.localizeDynamic(label,native,config.target)??game.localizeManor(label,native,config.target)??game.localizeRecord(label,native,config.target)??native:native);ask(label,r);
 }
 function restoreAll(){for(const [label,r]of records)if(valid(label))display(label,r,r.native);images.restore();}
 function status(){emit('STATUS',{status:{ready:!!engine,stopped,...images.status()}});}
@@ -71,13 +116,13 @@ function attach(){const cc=window.cc;if(!cc?.Label||!cc.RichText||!cc.director?.
 function syncNames(){const before=epoch;readNames();if(before!==epoch&&config.enabled&&!stopped)for(const [label,r]of records)ask(label,r);}
 function lightCheck(){if(disposed||document.hidden||stopped||!engine||!config.enabled||!config.configured)return;syncNames();lastLight=Date.now();try{let changed=false;for(const [label,r]of records){if(!valid(label)){reset(r);records.delete(label);changed=true;continue;}const on=active(label);if(!on){if(r.wasActive){reset(r);changed=true;}r.wasActive=false;continue;}const current=actual(label);if(!r.wasActive||current!==r.display){update(label,current===r.display?r.native:current,{preserve:current===r.display});changed=true;}r.wasActive=true;}if(changed)status();}catch{fail('게임 엔진 구조가 호환되지 않습니다. 원문을 유지합니다.');}}
 function refresh(){if(disposed||document.hidden||stopped)return;try{if(!engine&&!attach()){status();return;}for(const h of hooks)if(Object.getOwnPropertyDescriptor(h.proto,'string')?.set!==h.set){fail('다른 확장이 텍스트 표시를 변경했습니다. 다른 번역 확장을 끄고 게임을 새로고침하세요.');return;}
- images.configure();if(!config.enabled){status();return;}syncNames();lastScan=Date.now();const scene=engine.director.getScene();if(!scene){status();return;}const seen=new Set(),stack=[scene];
+ nativeTemplates.refresh();images.configure();if(!config.enabled){status();return;}syncNames();lastScan=Date.now();const scene=engine.director.getScene();if(!scene){status();return;}const seen=new Set(),stack=[scene];
  images.begin();
  while(stack.length){const n=stack.pop();if(!valid(n))continue;images.visit(n);for(const label of n._components||[])if(safeType(label)&&!richChild(label)){seen.add(label);const r=records.get(label),current=actual(label);update(label,r&&current===r.display?r.native:current,{preserve:!!r&&current===r.display});const updated=records.get(label);if(updated)updated.wasActive=active(label);}for(const child of n.children||[])stack.push(child);}
  for(const [label,r]of records)if(!seen.has(label)){if(valid(label))display(label,r,r.native);reset(r);records.delete(label);}images.end();status();
  }catch(e){fail('게임 엔진 구조가 호환되지 않습니다. 원문을 유지합니다.');}}
 function inputBurst(){if(disposed||document.hidden||stopped||!config.enabled)return;burstUntil=Date.now()+480;if(burstTimer)return;const run=()=>{burstTimer=null;if(disposed||document.hidden||stopped||!config.enabled)return;refresh();if(Date.now()<burstUntil)burstTimer=setTimeout(run,160);};burstTimer=setTimeout(run,Math.max(16,120-(Date.now()-lastScan)));}
-function tick(){heartbeat=null;if(disposed)return;if(!engine){attachAttempts++;refresh();}else if(config.enabled&&!document.hidden&&!stopped){lightCheck();if(Date.now()-lastScan>=650)refresh();}heartbeat=setTimeout(tick,engine?(config.enabled&&!document.hidden&&!stopped?64:750):(attachAttempts<30?100:1000));}
+function tick(){heartbeat=null;if(disposed)return;nativeTemplates.refresh();if(!engine){attachAttempts++;refresh();}else if(config.enabled&&!document.hidden&&!stopped){lightCheck();if(Date.now()-lastScan>=650)refresh();}heartbeat=setTimeout(tick,engine?(config.enabled&&!document.hidden&&!stopped?64:750):(attachAttempts<30?100:1000));}
 function invalidate(){epoch++;clearMemory();for(const r of records.values())reset(r);}
 function onMessage(event){
  if(disposed||event.source!==window||event.origin!==location.origin)return;
@@ -104,14 +149,15 @@ function onMessage(event){
  syncNames();
  for(const result of m.results){
   if(!result||typeof result.id!=='string')continue;
-  const match=byRequest.get(result.id);if(!match)continue;const {label,r}=match;
-  if(r.requestId!==result.id||r.requested!==r.raw)continue;
+  const match=byRequest.get(result.id);if(!match)continue;const {label,r,provenance}=match;
+  if(match.nameSource!==undefined){resultNameReply(result,match);continue;}
+  if(syncNative(label,r)!==provenance||JSON.stringify(result.nativeTemplates||[])!==provenance||r.requestId!==result.id||r.requested!==r.raw)continue;
   if(valid(label)&&story.source(label,r.native)!==r.raw){const now=actual(label);update(label,now===r.display?r.native:now);continue;}
   if(result.missing===true){r.resolved=true;byRequest.delete(r.requestId);r.requestId=null;continue;}
   if(typeof result.text!=='string'||result.text.length>50000)continue;
   const cacheSource=typeof result.cacheSource==='string'?result.cacheSource:r.raw;
   if(!boundSource(r,cacheSource)||rendered(r,result.text,cacheSource)===null)continue;
-  remember(r.raw,result.text,cacheSource);r.resolved=true;byRequest.delete(r.requestId);r.requestId=null;
+  remember(r.raw,result.text,cacheSource,provenance);r.resolved=true;byRequest.delete(r.requestId);r.requestId=null;
   if(valid(label)){const now=actual(label);if(now===r.display||now===r.native)applyText(label,r,result.text,cacheSource);else update(label,now);}
  }
  status();
@@ -119,6 +165,6 @@ function onMessage(event){
 function visibility(){if(disposed)return;if(!document.hidden){refresh();clearTimeout(heartbeat);heartbeat=setTimeout(tick,64);}}
 document.addEventListener?.('visibilitychange',visibility);
 window.addEventListener('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.addEventListener(event,inputBurst,{passive:true});
-window[APP]={refresh,dispose(){disposed=true;clearTimeout(heartbeat);clearTimeout(lightTimer);clearTimeout(burstTimer);restoreAll();images.dispose();game.dispose();for(const [event,fn]of engineEvents)try{engine.director.off(event,fn);}catch{}document.removeEventListener?.('visibilitychange',visibility);window.removeEventListener?.('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.removeEventListener?.(event,inputBurst);for(const h of hooks)if(Object.getOwnPropertyDescriptor(h.proto,'string')?.set===h.set)Object.defineProperty(h.proto,'string',h.before);records.clear();byRequest.clear();clearMemory();delete window[APP];}};
+window[APP]={refresh,dispose(){disposed=true;nativeTemplates.dispose();clearTimeout(heartbeat);clearTimeout(lightTimer);clearTimeout(burstTimer);restoreAll();images.dispose();game.dispose();for(const [event,fn]of engineEvents)try{engine.director.off(event,fn);}catch{}document.removeEventListener?.('visibilitychange',visibility);window.removeEventListener?.('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.removeEventListener?.(event,inputBurst);for(const h of hooks)if(Object.getOwnPropertyDescriptor(h.proto,'string')?.set===h.set)Object.defineProperty(h.proto,'string',h.before);records.clear();byRequest.clear();clearMemory();delete window[APP];}};
 emit('HELLO');refresh();heartbeat=setTimeout(tick,engine?64:100);
 })();

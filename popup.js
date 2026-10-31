@@ -1,9 +1,27 @@
 'use strict';
 const toggle=document.getElementById('enabled'),toggleText=document.getElementById('enabled-text'),version=document.getElementById('version'),update=document.getElementById('update'),status=document.getElementById('status');
+const extensionBox=document.getElementById('extension'),extensionLatest=document.getElementById('extension-latest'),extensionLink=document.getElementById('extension-link');
+document.getElementById('extension-version').textContent=chrome.runtime.getManifest().version;
+const extensionServer=document.getElementById('extension-server'),resourceServer=document.getElementById('resource-server');
+function latestText(info){if(!info?.known)return info?.error?'확인 실패':'확인 전';const value=info.latest||'게시 없음';return info.error?value+'\n(확인 실패)':value;}
 let currentState=null,changing=false,checking=false,closed=false;
 function show(message,error=false){status.textContent=message;status.classList.toggle('error',error);}
-function render(state){if(!state)return;currentState=state;toggle.checked=state.enabled;toggleText.textContent=state.enabled?'On':'Off';version.textContent=state.version||'—';toggle.disabled=changing;update.disabled=checking;}
+function renderExtension(state){
+  const info=state?.extension;
+  if(!info?.available){extensionBox.hidden=true;return;}
+  extensionLatest.textContent=info.target;
+  extensionLink.href=info.url;
+  extensionLink.textContent=info.url.endsWith('.zip')?'확장 ZIP 내려받기':'공식 업데이트 안내 열기';
+  extensionBox.hidden=false;
+}
+function render(state){if(!state)return;currentState=state;toggle.checked=state.enabled;toggleText.textContent=state.enabled?'On':'Off';version.textContent=state.version||'—';extensionServer.textContent=latestText(state.extension);resourceServer.textContent=latestText(state.resource);toggle.disabled=changing;update.disabled=checking;renderExtension(state);}
 async function request(message){const response=await chrome.runtime.sendMessage(message);if(!response?.ok)throw Error(response?.error||'확장에 연결하지 못했습니다.');return response;}
+async function checkExtension(){
+  // A fresh extension ZIP is the only fix for a resource that requires a newer
+  // extension. The popup never downloads it automatically, because Chrome cannot
+  // replace an unpacked extension without the user's explicit reload.
+  try{const response=await request({type:'CHECK_EXTENSION'});if(!closed)render(response.state);}catch{}
+}
 toggle.addEventListener('change',async()=>{
   const wanted=toggle.checked;changing=true;toggle.disabled=true;
   try{const response=await request({type:'SET_ENABLED',enabled:wanted});render(response.state);show(wanted?'현재 게임에 한글화를 적용했습니다.':'현재 게임을 원문으로 표시합니다.');}
@@ -12,13 +30,14 @@ toggle.addEventListener('change',async()=>{
 });
 update.addEventListener('click',async()=>{
   if(checking)return;checking=true;update.disabled=true;show('새 한글 리소스를 확인하고 있습니다.');
+  void checkExtension();
   try{
     const response=await request({type:'CHECK_UPDATE'});render(response.state);
     const result=response.result;
     if(result.status==='updated')show(response.state.enabled?'새 한글 리소스를 현재 게임에 적용했습니다.':'새 한글 리소스를 저장했습니다. 한글화 On에서 적용됩니다.');
     else if(result.status==='current')show('최신 한글 리소스입니다.');
     else if(result.status==='unpublished')show('아직 공개된 업데이트가 없습니다. 기본 한글 리소스를 사용합니다.');
-    else if(result.status==='requires-extension')show('새 리소스를 사용하려면 확장 업데이트가 필요합니다. GitHub Releases에서 새 확장을 설치해 주세요.');
+    else if(result.status==='requires-extension')show('새 리소스를 사용하려면 확장 업데이트가 필요합니다. 표시된 확장 업데이트 안내를 먼저 확인해 주세요.');
     else throw Error('업데이트 상태를 확인하지 못했습니다.');
   }catch(error){show(error.message,true);}
   finally{checking=false;if(currentState)render(currentState);else update.disabled=false;}

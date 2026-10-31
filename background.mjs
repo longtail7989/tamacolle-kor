@@ -1,20 +1,49 @@
 import {validatePack,createTextIndex,lookupText,compareVersions} from './resource-pack.mjs';
 import {createResourceStore} from './resource-store.mjs';
 import {createGitHubUpdater} from './github-release.mjs';
+import {createExtensionUpdater} from './extension-release.mjs';
+import './native-template-protocol.js';
+const nativeTemplates=globalThis[Symbol.for('tamacolle-kor-native-template-protocol.v1')];
 
 const extensionVersion=chrome.runtime.getManifest().version;
 const store=createResourceStore();
 const ports=new Set();
 let active,index,enabled=true,lastChecked=0,updateError='',updateTask=null;
-const state=()=>({enabled,version:active?.version||'',extensionVersion,lastChecked,error:updateError});
+let resourceLatest='',resourceKnown=false,resourceError='';
+let extensionChecked=0,extensionLatest='',extensionUrl='',extensionError='',extensionRequired='',extensionKnown=false;
+const versionText=value=>typeof value==='string'&&/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+function extensionNotice(){
+  const required=versionText(extensionRequired)&&compareVersions(extensionRequired,extensionVersion)>0?extensionRequired:'';
+  const latest=extensionKnown&&versionText(extensionLatest)?extensionLatest:'';
+  const target=required&&(!latest||compareVersions(required,latest)>0)?required:latest;
+  const available=!!target&&compareVersions(target,extensionVersion)>0;
+  const url=available&&latest===target&&extensionUrl?extensionUrl:'https://github.com/longtail7989/tamacolle-kor/releases';
+  return {checked:extensionChecked,latest,known:extensionKnown,target,required,available,url,error:extensionError};
+}
+const state=()=>({enabled,version:active?.version||'',extensionVersion,lastChecked,error:updateError,resource:{latest:resourceLatest,known:resourceKnown,checked:lastChecked,error:resourceError},extension:extensionNotice()});
+function updateExtensionBadge(){
+  const notice=extensionNotice();
+  void chrome.action.setBadgeText({text:notice.available?'!':''});
+  void chrome.action.setTitle({title:notice.available?`타마코레 한글화 — 확장 ${notice.target} 업데이트`:'타마코레 한글화'});
+}
 const ready=initialize();
 const updater=createGitHubUpdater({getCurrent:()=>active,apply:activateResources,extensionVersion});
+const extensionUpdater=createExtensionUpdater({currentVersion:extensionVersion});
 
 async function initialize(){
-  const settings=await chrome.storage.local.get({enabled:true,lastChecked:0,updateError:''});
+  const settings=await chrome.storage.local.get({enabled:true,lastChecked:0,updateError:'',resourceLatest:'',resourceKnown:false,resourceError:'',extensionChecked:0,extensionLatest:'',extensionUrl:'',extensionError:'',extensionRequired:'',extensionKnown:false});
   enabled=settings.enabled!==false;
   lastChecked=Number.isSafeInteger(settings.lastChecked)?settings.lastChecked:0;
   updateError=typeof settings.updateError==='string'?settings.updateError.slice(0,500):'';
+  resourceLatest=versionText(settings.resourceLatest)?settings.resourceLatest:'';
+  resourceKnown=settings.resourceKnown===true&&(settings.resourceLatest===''||versionText(settings.resourceLatest));
+  resourceError=typeof settings.resourceError==='string'?settings.resourceError.slice(0,500):'';
+  extensionChecked=Number.isSafeInteger(settings.extensionChecked)?settings.extensionChecked:0;
+  extensionLatest=versionText(settings.extensionLatest)?settings.extensionLatest:'';
+  extensionUrl=typeof settings.extensionUrl==='string'&&/^https:\/\/github\.com\/longtail7989\/tamacolle-kor\/releases\/download\/resource-v\d+\.\d+\.\d+\/tamacolle-kor-\d+\.\d+\.\d+-extension\.zip$/.test(settings.extensionUrl)?settings.extensionUrl:'';
+  extensionError=typeof settings.extensionError==='string'?settings.extensionError.slice(0,500):'';
+  extensionRequired=versionText(settings.extensionRequired)?settings.extensionRequired:'';
+  extensionKnown=settings.extensionKnown===true&&(settings.extensionLatest===''||versionText(settings.extensionLatest));
   const response=await fetch(chrome.runtime.getURL('resources/ko.json'));
   if(!response.ok)throw Error('기본 한글 리소스를 읽지 못했습니다.');
   const bundled=await validatePack(await response.arrayBuffer(),{extensionVersion});
@@ -29,8 +58,10 @@ async function initialize(){
     updateError='저장된 리소스를 읽지 못해 기본 한글 리소스를 사용합니다.';
   }
   index=createTextIndex(active);
+  updateExtensionBadge();
 }
 function broadcast(){
+  updateExtensionBadge();
   const message={type:'STATE_CHANGED',state:state()};
   for(const port of ports){try{port.postMessage(message);}catch{ports.delete(port);}}
 }
@@ -51,10 +82,16 @@ async function checkUpdates(){
   updateTask=(async()=>{
     await ready;
     let result,failure;
-    try{result=await updater.checkAndUpdate();updateError='';}
+    try{
+      result=await updater.checkAndUpdate();updateError='';
+      extensionRequired=result.status==='requires-extension'?result.minimumExtensionVersion:'';
+    }
     catch(error){failure=error;updateError=publicError(error);}
+    const latest=updater.latestVersion;
+    if(latest!==undefined){resourceLatest=latest;resourceKnown=true;resourceError='';}
+    else if(failure)resourceError=updateError;
     lastChecked=Date.now();
-    try{await chrome.storage.local.set({lastChecked,updateError});}
+    try{await chrome.storage.local.set({lastChecked,updateError,extensionRequired,resourceLatest,resourceKnown,resourceError});}
     catch(error){if(!failure){failure=error;updateError='업데이트 확인 상태를 저장하지 못했습니다.';}}
     broadcast();
     if(failure)throw failure;
@@ -63,7 +100,32 @@ async function checkUpdates(){
   return updateTask;
 }
 function checkIfDue(){
-  ready.then(()=>{if(Date.now()-lastChecked>=24*60*60*1000)return checkUpdates();}).catch(()=>{});
+  ready.then(()=>{if(!resourceKnown||Date.now()-lastChecked>=24*60*60*1000)return checkUpdates();}).catch(()=>{});
+}
+let extensionTask=null;
+async function checkExtension(){
+  if(extensionTask)return extensionTask;
+  extensionTask=(async()=>{
+    await ready;
+    let result,failure;
+    try{result=await extensionUpdater.check();extensionError='';}
+    catch(error){failure=error;extensionError=publicError(error);}
+    extensionChecked=Date.now();
+    if(result){
+      extensionLatest=result.latest;
+      extensionUrl=result.url||'';
+      extensionKnown=true;
+    }
+    try{await chrome.storage.local.set({extensionChecked,extensionLatest,extensionUrl,extensionError,extensionKnown});}
+    catch(error){if(!failure){failure=error;extensionError='확장 업데이트 확인 상태를 저장하지 못했습니다.';}}
+    broadcast();
+    if(failure)throw failure;
+    return result;
+  })().finally(()=>{extensionTask=null;});
+  return extensionTask;
+}
+function extensionIfDue(){
+  ready.then(()=>{if(!extensionKnown||Date.now()-extensionChecked>=12*60*60*1000)return checkExtension();}).catch(()=>{});
 }
 const publicError=error=>typeof error?.message==='string'?error.message.slice(0,500):'작업을 완료하지 못했습니다.';
 function popupSender(sender){return sender?.id===chrome.runtime.id&&sender.url===chrome.runtime.getURL('popup.html');}
@@ -77,11 +139,13 @@ function validItems(items){
   const ids=new Set();let chars=0;
   for(const item of items){
     if(!item||!validId(item.id)||ids.has(item.id)||typeof item.source!=='string'||!item.source.trim()||item.source.length>8192||typeof item.context!=='string'||item.context.length>300)return false;
-    ids.add(item.id);chars+=item.source.length+item.context.length;
+    ids.add(item.id);chars+=item.id.length+item.source.length+item.context.length;
     if(item.templates!==undefined){
       if(!Array.isArray(item.templates)||item.templates.length>8||item.templates.some(s=>typeof s!=='string'||!s.trim()||s.length>8192))return false;
       chars+=item.templates.reduce((sum,s)=>sum+s.length,0);
     }
+    if(!nativeTemplates.validate(item.nativeTemplates))return false;
+    chars+=nativeTemplates.size(item.nativeTemplates);
     if(chars>512*1024)return false;
   }
   return true;
@@ -90,13 +154,14 @@ async function handle(message,sender){
   const popup=popupSender(sender),game=gameSender(sender);
   if(!popup&&!game)throw Error('허용되지 않은 요청입니다.');
   await ready;
-  if(message.type==='GET_STATE'){checkIfDue();return {ok:true,state:state()};}
+  if(message.type==='GET_STATE'){checkIfDue();extensionIfDue();return {ok:true,state:state()};}
   if(message.type==='SET_ENABLED'&&popup){
     if(typeof message.enabled!=='boolean')throw Error('한글화 상태가 올바르지 않습니다.');
     await chrome.storage.local.set({enabled:message.enabled});
     enabled=message.enabled;broadcast();return {ok:true,state:state()};
   }
   if(message.type==='CHECK_UPDATE'&&popup)return {ok:true,result:await checkUpdates(),state:state()};
+  if(message.type==='CHECK_EXTENSION'&&popup)return {ok:true,result:await checkExtension(),state:state()};
   if(message.type==='GET_CATALOG'&&game)return {ok:true,version:active.version,catalog:active.images.map(({dataUrl,pngHash,...entry})=>entry)};
   if(message.type==='LOOKUP_TEXT'&&game){
     if(message.version!==active.version)return {ok:false,stale:true,state:state()};
@@ -122,10 +187,12 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
 chrome.runtime.onConnect.addListener(port=>{
   if(!(port.name==='tamacolle-kor-game'&&gameSender(port.sender))&&!(port.name==='tamacolle-kor-popup'&&popupSender(port.sender))){port.disconnect();return;}
   ports.add(port);port.onDisconnect.addListener(()=>ports.delete(port));
+  port.onMessage.addListener(message=>{if(message?.type==='KEEP_ALIVE')port.postMessage({type:'ALIVE'});});
   ready.then(()=>{if(ports.has(port))port.postMessage({type:'STATE_CHANGED',state:state()});}).catch(error=>{if(ports.has(port))port.postMessage({type:'ERROR',error:publicError(error)});});
   checkIfDue();
+  extensionIfDue();
 });
-chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='resource-update')checkIfDue();});
+chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='resource-update'){checkIfDue();extensionIfDue();}});
 function scheduleChecks(){chrome.alarms.create('resource-update',{delayInMinutes:1,periodInMinutes:1440});}
-chrome.runtime.onInstalled.addListener(()=>{scheduleChecks();checkIfDue();});
-chrome.runtime.onStartup.addListener(()=>{scheduleChecks();checkIfDue();});
+chrome.runtime.onInstalled.addListener(()=>{scheduleChecks();checkIfDue();extensionIfDue();});
+chrome.runtime.onStartup.addListener(()=>{scheduleChecks();checkIfDue();extensionIfDue();});

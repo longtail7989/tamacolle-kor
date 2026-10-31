@@ -162,7 +162,7 @@ export async function runResourceTests() {
       const error = await rejects(() => validatePack(pack)); equal(error.code, 'REQUIRES_EXTENSION'); equal(error.version, '1.0.0');
       equal((await validatePack(pack, {extensionVersion: '0.2.0'})).version, '1.0.0');
       for (const field of ['format', 'schemaVersion', 'version', 'minimumExtensionVersion', 'texts', 'images']) { const bad = basePack(); delete bad[field]; await rejects(() => validatePack(bad)); }
-      const tooManyTexts = basePack(); tooManyTexts.texts = Array(50001).fill(tooManyTexts.texts[0]); await rejects(() => validatePack(tooManyTexts), /개수/);
+      const tooManyTexts = basePack(); tooManyTexts.texts = Array(100001).fill(tooManyTexts.texts[0]); await rejects(() => validatePack(tooManyTexts), /개수/);
       const tooManyImages = basePack(); tooManyImages.images = Array(2001).fill({}); await rejects(() => validatePack(tooManyImages), /개수/);
       await rejects(() => validatePack(new Uint8Array(MAX_PACK_BYTES + 1)), /32MiB/);
       const long = basePack(); long.texts[0].source = '字'.repeat(8193); await rejects(() => validatePack(long), /길이/);
@@ -188,6 +188,45 @@ export async function runResourceTests() {
       equal(lookupText(index, {id: 'e', source: '<b>原\n文</b>', context: 'TamacolleDialogue'}).cacheSource, '<b>原文</b>');
       equal(lookupText(index, {id: 'f', source: '原文', templates: ['{USER}さん'], context: 'TamacolleDialogue'}).cacheSource, '原文');
       await rejects(() => lookupText(index, {id: 'x', source: '原文', templates: Array(9).fill('原文')}));
+    }],
+    ['native templates bind only complete approved dictionaries after literal, USER and story hits', async () => {
+      const a = '{TAMACOLLE_ACTOR_0}', b = '{TAMACOLLE_ACTOR_1}', canonical = `${a}と${b}、出発。`;
+      const entries = [
+        {source: canonical, text: `${a}, ${b} 출발하자.`, context: 'TamacolleDialogue'},
+        {source: 'アキラ', text: '아키라', context: 'TamacolleSpeaker'}, {source: 'レオン', text: '레온$&', context: ''},
+        {source: 'アキラとレオン、出発。', text: '기존 승인 문장.', context: ''},
+        {source: '{USER}とレオン、出発。', text: '{USER}, 기존 이름 문장.', context: ''},
+        {source: '別の原文', text: '기존 줄바꿈 문장.', context: ''}
+      ];
+      const pack = basePack(); pack.texts = entries;
+      const index = createTextIndex(await validatePack(pack)), request = (source, names, extra = {}) => ({id: 'native', source, context: 'TamacolleDialogue', nativeTemplates: [{source: canonical, bindings: names.map((name, i) => ({token: i ? b : a, source: name}))}], ...extra});
+      equal(lookupText(index, request('アキラとレオン、出発。', ['アキラ', 'レオン'])).text, '기존 승인 문장.');
+      equal(lookupText(index, request('ミナトとレオン、出発。', ['{USER}', 'レオン'], {templates: ['{USER}とレオン、出発。']})).text, '{USER}, 기존 이름 문장.');
+      equal(lookupText(index, request('別の\n原文', ['アキラ', 'レオン'])).text, '기존 줄바꿈 문장.');
+      const before = index.exact.size;
+      equal(lookupText(index, request('レオンとアキラ、出発。', ['レオン', 'アキラ'])), {id: 'native', text: '레온$&, 아키라 출발하자.', cacheSource: 'レオンとアキラ、出発。'});
+      equal(lookupText(index, request('プレイヤーとアキラ、出発。', ['{USER}', 'アキラ'])).text, '{USER}, 아키라 출발하자.');
+      equal(lookupText(index, request('未登録とアキラ、出発。', ['未登録', 'アキラ'])), null);
+      equal(lookupText(index, request('レオンとアキラ、出発。', ['レオン', 'アキラ'], {context: 'Menu'})), null);
+      equal(index.exact.size, before, 'bound variants are display results, not new cache rows');
+      const wrapped = request('レオンとアキラ、出発。', ['レオン', 'アキラ']); wrapped.nativeTemplates[0].source = `<size=24>${canonical}</size>`;
+      equal(lookupText(index, wrapped).text, '레온$&, 아키라 출발하자.', 'canonical lookup retains existing story wrapper equivalence');
+      const malformed = request('アキラとレオン、出発。', ['アキラ', 'レオン']); malformed.nativeTemplates[0].bindings[0].extra = true;
+      await rejects(() => lookupText(index, malformed));
+      const validCandidate = request('未登録', ['アキラ', 'レオン']).nativeTemplates[0];
+      const malformedPayloads = [null, {}, [validCandidate, validCandidate, validCandidate], [{...validCandidate, extra: true}], [{source: '', bindings: validCandidate.bindings}], [{source: canonical + '字'.repeat(8192), bindings: validCandidate.bindings}]];
+      for (const change of [
+        value => { value.bindings = []; }, value => { value.bindings.push(clone(value.bindings[0])); },
+        value => { value.bindings[0].source = ''; }, value => { value.bindings[0].source = '名'.repeat(513); },
+        value => { value.bindings[0].token = b; }, value => { value.bindings.reverse(); },
+        value => { value.source = `${a}${a}`; }, value => { value.source = `${a}{TAMACOLLE_ACTOR_2}`; },
+        value => { value.source = `${a}{TAMACOLLE_ACTOR_01}`; }
+      ]) { const candidate = clone(validCandidate); change(candidate); malformedPayloads.push([candidate]); }
+      for (const nativeTemplates of malformedPayloads) await rejects(() => lookupText(index, {id: 'bad', source: 'アキラとレオン、出発。', context: 'TamacolleDialogue', nativeTemplates}));
+      for (const text of [`${a} 출발하자.`, `${a} ${a} 출발하자.`, `${a} ${b} {TAMACOLLE_ACTOR_2}`, `${a} ${b} 99`, `${a} ${b} {USER}`]) {
+        const invalid = createTextIndex({texts: [{...entries[0], text}, ...entries.slice(1)]});
+        equal(lookupText(invalid, request('レオンとアキラ、出発。', ['レオン', 'アキラ'])), null, 'malformed stored templates must not leak actor tokens');
+      }
     }],
     ['resource store resolves only at commit; abort preserves durable active record', async () => {
       const fake = controlledIDB(), options = {indexedDB: fake.indexedDB, dbName: 'unit'};
@@ -233,10 +272,19 @@ export async function runResourceTests() {
       const old = basePack('0.9.0'), network = server(await releaseFor(old), bytesOf(old)), harness = updaterFor(network.fetchImpl);
       await rejects(() => harness.updater.checkAndUpdate(), /이전 버전/); equal(network.calls.length, 1);
     }],
+    ['published version discovery remains separate from activation, failed checks and unpublished releases', async () => {
+      const old=basePack('0.9.0'),release=await releaseFor(old);let mode='published';
+      const harness=updaterFor(async()=>{if(mode==='offline')throw Error('offline');if(mode==='unpublished')return new Response('{}',{status:404});if(mode==='invalid')return new Response(JSON.stringify({...release,html_url:'https://evil.example/release'}));return new Response(JSON.stringify(release));});
+      await rejects(()=>harness.updater.checkAndUpdate(),/이전 버전/);equal(harness.updater.latestVersion,'0.9.0');equal(harness.active().version,'1.0.0');equal(harness.applyCount(),0);
+      mode='offline';await rejects(()=>harness.updater.checkAndUpdate(),/네트워크/);equal(harness.updater.latestVersion,undefined);
+      mode='unpublished';equal((await harness.updater.checkAndUpdate()).status,'unpublished');equal(harness.updater.latestVersion,'');
+      mode='invalid';await rejects(()=>harness.updater.checkAndUpdate(),/공식 저장소/);equal(harness.updater.latestVersion,undefined);
+    }],
     ['minimum app version returns requires-extension only after full integrity/schema checks', async () => {
       const next = basePack('1.1.0'); next.minimumExtensionVersion = '0.2.0';
       const network = server(await releaseFor(next), bytesOf(next)), harness = updaterFor(network.fetchImpl);
-      equal((await harness.updater.checkAndUpdate()).status, 'requires-extension'); equal(harness.applyCount(), 0); equal(harness.active().version, '1.0.0');
+      const result = await harness.updater.checkAndUpdate();
+      equal(result.status, 'requires-extension'); equal(result.minimumExtensionVersion, '0.2.0'); equal(harness.applyCount(), 0); equal(harness.active().version, '1.0.0');
       next.texts[0].text = '숫자 누락'; const invalid = server(await releaseFor(next), bytesOf(next)), invalidHarness = updaterFor(invalid.fetchImpl);
       await rejects(() => invalidHarness.updater.checkAndUpdate(), /일치하지/); equal(invalidHarness.applyCount(), 0);
     }],

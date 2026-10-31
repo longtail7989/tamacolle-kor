@@ -1,8 +1,10 @@
 import './dialogue-text.js';
+import './native-template-protocol.js';
 
 export const MAX_PACK_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 512 * 1024;
 const dialogue = globalThis[Symbol.for('tamacolle-kor-dialogue-text.v1')];
+const nativeTemplates = globalThis[Symbol.for('tamacolle-kor-native-template-protocol.v1')];
 const encoder = new TextEncoder();
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) && value.length === 64;
@@ -118,7 +120,9 @@ async function validateImage(entry) {
   if (!base64 || base64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) fail('PNG base64가 올바르지 않습니다.');
   const binary = atob(base64);
   if (binary.length < 45 || binary.length > MAX_IMAGE_BYTES || btoa(binary) !== base64) fail('PNG 크기 또는 base64가 올바르지 않습니다.');
-  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0)), view = new DataView(bytes.buffer);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
   if ([137, 80, 78, 71, 13, 10, 26, 10].some((value, index) => bytes[index] !== value)) fail('PNG 서명이 올바르지 않습니다.');
   let position = 8, imageData = false, ended = false;
   while (position < bytes.length) {
@@ -147,7 +151,7 @@ export async function validatePack(raw, {extensionVersion = '0.1.0'} = {}) {
   keys(pack, ['format', 'schemaVersion', 'version', 'minimumExtensionVersion', 'texts', 'images']);
   if (pack.format !== 'tamacolle-kor-resources' || pack.schemaVersion !== 1) fail('지원하지 않는 파일 형식입니다.');
   versionParts(pack.version); versionParts(pack.minimumExtensionVersion); versionParts(extensionVersion);
-  if (!Array.isArray(pack.texts) || pack.texts.length > 50000 || !Array.isArray(pack.images) || pack.images.length > 2000) fail('번역문 또는 PNG 개수 제한을 초과했습니다.');
+  if (!Array.isArray(pack.texts) || pack.texts.length > 100000 || !Array.isArray(pack.images) || pack.images.length > 2000) fail('번역문 또는 PNG 개수 제한을 초과했습니다.');
   const sources = new Set(), imageKeys = new Set();
   for (const entry of pack.texts) {
     validateText(entry);
@@ -175,9 +179,23 @@ export function createTextIndex(pack) {
 }
 export function lookupText(index, item) {
   if (!item || typeof item.id !== 'string' || item.id.length > 80 || typeof item.source !== 'string' || !item.source.trim() || item.source.length > 8192 || (item.context !== undefined && (typeof item.context !== 'string' || item.context.length > 300)) || (item.templates !== undefined && (!Array.isArray(item.templates) || item.templates.length > 8 || item.templates.some(source => typeof source !== 'string' || !source.trim() || source.length > 8192)))) throw new Error('번역 조회 요청이 올바르지 않습니다.');
+  if (!nativeTemplates.validate(item.nativeTemplates)) throw new Error('네이티브 이름 템플릿이 올바르지 않습니다.');
   const candidates = [item.source, ...(item.templates || [])];
   let hit;
   for (const source of candidates) { hit = index.exact.get(source); if (hit) break; }
   if (!hit && dialogue.isStory(item.context)) for (const source of candidates) { hit = index.story.get(dialogue.key(source)); if (hit) break; }
-  return hit ? {id: item.id, text: hit.text, cacheSource: hit.source} : null;
+  if (hit) return {id: item.id, text: hit.text, cacheSource: hit.source};
+  if (dialogue.isStory(item.context)) for (const candidate of item.nativeTemplates || []) {
+    const template = index.exact.get(candidate.source) || index.story.get(dialogue.key(candidate.source));
+    if (!template) continue;
+    const names = new Map();
+    for (const binding of candidate.bindings) {
+      if (binding.source === '{USER}') continue;
+      const name = index.exact.get(binding.source);
+      if (name) names.set(binding.source, name.text);
+    }
+    const text = nativeTemplates.bind(template.text, {source: template.source, bindings: candidate.bindings}, names);
+    if (text !== null) return {id: item.id, text, cacheSource: item.source};
+  }
+  return null;
 }

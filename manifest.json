@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "타마코레 한글화",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "타마코레의 대사와 UI를 한국어로 표시합니다. GitHub에서 한글 리소스를 업데이트합니다.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms"],
@@ -22,17 +22,23 @@
   "content_scripts": [
     {
       "matches": ["https://nijitama.app/games/tamacolle/index*.html"],
-      "js": ["image-policy.js", "game-adapter.js", "dialogue-text.js", "name-policy.js", "story-policy.js", "main.js"],
+      "js": ["image-policy.js", "game-adapter.js", "dialogue-text.js", "name-policy.js", "story-policy.js", "native-template-protocol.js", "native-template-policy.js", "main.js"],
       "world": "MAIN",
       "all_frames": true,
       "run_at": "document_idle"
     },
     {
       "matches": ["https://nijitama.app/games/tamacolle/index*.html"],
-      "js": ["content.js"],
+      "js": ["native-template-protocol.js", "content.js"],
       "world": "ISOLATED",
       "all_frames": true,
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dialogue-text.js", "native-template-protocol.js"],
+      "matches": ["https://nijitama.app/*"]
     }
   ],
   "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}

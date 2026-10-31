@@ -5,7 +5,7 @@ function create({getEngine,getRecords,game}){
   let segmenter=null;
   const valid=value=>!!value&&(!getEngine()?.isValid||getEngine().isValid(value));
   function progress(label,nativeFrame){try{return valid(label)?game.frame(label,nativeFrame):null;}catch{return null;}}
-  function source(label,nativeFrame){return game.placeSource?.(label,nativeFrame)??game.speakerSource?.(label,nativeFrame)??progress(label,nativeFrame)?.full??nativeFrame;}
+  function source(label,nativeFrame){return game.titleSource?.(label,nativeFrame)??game.placeSource?.(label,nativeFrame)??game.speakerSource?.(label,nativeFrame)??progress(label,nativeFrame)?.full??nativeFrame;}
   function typingPlan(text){
     segmenter??=new Intl.Segmenter(undefined,{granularity:'grapheme'});
     const units=[],stack=[],spans=[];

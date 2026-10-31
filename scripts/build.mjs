@@ -9,8 +9,9 @@ import {validatePack} from '../resource-pack.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const files = [
   'manifest.json', 'background.mjs', 'resource-pack.mjs', 'resource-store.mjs',
-  'github-release.mjs', 'main.js', 'content.js', 'image-policy.js',
+  'github-release.mjs', 'extension-release.mjs', 'main.js', 'content.js', 'image-policy.js',
   'game-adapter.js', 'dialogue-text.js', 'name-policy.js', 'story-policy.js',
+  'native-template-protocol.js', 'native-template-policy.js',
   'popup.html', 'popup.js', 'popup.css', 'icons/icon16.png', 'icons/icon32.png',
   'icons/icon48.png', 'icons/icon128.png', 'resources/ko.json'
 ].sort();

@@ -6,9 +6,9 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.1.1';
 const MAX_PACK_BYTES = 32 * 1024 * 1024;
-const PUBLIC_TEXT_FILES = ['tamacolle-fixed-ui-ko.json', 'tamacolle-main-story-ko.json'];
+const PUBLIC_TEXT_FILES = ['tamacolle-fixed-ui-ko.json', 'tamacolle-main-story-ko.json', 'tamacolle-side-story-ko.json'];
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -53,7 +53,7 @@ export async function assemblePack({from, version}) {
       texts.push(entry);
     }
   }
-  if (!texts.length || texts.length > 50000) throw Error('텍스트 개수 제한 초과');
+  if (!texts.length || texts.length > 100000) throw Error('텍스트 개수 제한 초과');
   const catalogSource = (await publicFile(from, 'image-catalog.js')).toString('utf8');
   const prefix = "/* Korean fixed UI patches; source fingerprints and geometry are verified before replacement. */\n(()=>{'use strict';globalThis[Symbol.for('tamacolle-ai-image-catalog.v1')]=Object.freeze(";
   const normalized = catalogSource.replace(/\r\n/g, '\n').trim();
