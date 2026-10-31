@@ -20,8 +20,16 @@
   <button id="update" type="button" disabled>업데이트 확인</button>
   <div id="extension" class="extension" role="status" aria-live="polite" hidden>
     <p>확장 앱 <strong id="extension-latest"></strong> 업데이트를 확인하세요.</p>
-    <a id="extension-link" href="#" target="_blank" rel="noopener noreferrer">확장 ZIP 내려받기</a>
-    <p class="note">ZIP 설치판은 자동 설치되지 않습니다. 압축을 해제해 기존 확장 폴더의 파일을 교체한 뒤 <code>chrome://extensions</code>에서 해당 확장의 새로고침을 누르고 게임도 새로고침하세요.</p>
+    <div id="extension-pc" hidden>
+      <a id="extension-zip-link" target="_blank" rel="noopener noreferrer" hidden>PC ZIP 내려받기</a>
+      <p class="note">PC: ZIP 압축을 해제해 기존 확장 폴더의 파일을 교체한 뒤 <code>chrome://extensions</code>에서 해당 확장을 새로고침하세요.</p>
+    </div>
+    <div id="extension-android" hidden>
+      <a id="extension-crx-link" target="_blank" rel="noopener noreferrer" hidden>Android CRX 내려받기</a>
+      <p class="note">Android Edge Canary: 개발자 메뉴의 CRX 설치 항목에서 내려받은 파일을 직접 선택하세요. 지원 여부는 브라우저 버전에 따라 다릅니다.</p>
+    </div>
+    <a id="extension-release-link" target="_blank" rel="noopener noreferrer" hidden>공식 업데이트 안내 열기</a>
+    <p class="note">확장 파일은 자동 설치되지 않습니다. 직접 설치한 뒤 게임도 새로고침하세요.</p>
   </div>
   <p id="status" role="status" aria-live="polite">불러오는 중입니다.</p>
 </body>

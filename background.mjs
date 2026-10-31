@@ -10,15 +10,21 @@ const store=createResourceStore();
 const ports=new Set();
 let active,index,enabled=true,lastChecked=0,updateError='',updateTask=null;
 let resourceLatest='',resourceKnown=false,resourceError='';
-let extensionChecked=0,extensionLatest='',extensionUrl='',extensionError='',extensionRequired='',extensionKnown=false;
+let extensionChecked=0,extensionLatest='',extensionUrl='',extensionCrxUrl='',extensionError='',extensionRequired='',extensionKnown=false;
 const versionText=value=>typeof value==='string'&&/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+function savedExtensionUrl(value,kind){
+  if(typeof value!=='string')return '';
+  const match=/^https:\/\/github\.com\/longtail7989\/tamacolle-kor\/releases\/download\/resource-v([^/]+)\/tamacolle-kor-([^/]+)-extension\.(zip|crx)$/.exec(value);
+  return match&&versionText(match[1])&&versionText(match[2])&&match[2]===extensionLatest&&match[3]===kind?value:'';
+}
 function extensionNotice(){
   const required=versionText(extensionRequired)&&compareVersions(extensionRequired,extensionVersion)>0?extensionRequired:'';
   const latest=extensionKnown&&versionText(extensionLatest)?extensionLatest:'';
   const target=required&&(!latest||compareVersions(required,latest)>0)?required:latest;
   const available=!!target&&compareVersions(target,extensionVersion)>0;
   const url=available&&latest===target&&extensionUrl?extensionUrl:'https://github.com/longtail7989/tamacolle-kor/releases';
-  return {checked:extensionChecked,latest,known:extensionKnown,target,required,available,url,error:extensionError};
+  const crxUrl=available&&latest===target&&extensionCrxUrl?extensionCrxUrl:null;
+  return {checked:extensionChecked,latest,known:extensionKnown,target,required,available,url,crxUrl,error:extensionError};
 }
 const state=()=>({enabled,version:active?.version||'',extensionVersion,lastChecked,error:updateError,resource:{latest:resourceLatest,known:resourceKnown,checked:lastChecked,error:resourceError},extension:extensionNotice()});
 function updateExtensionBadge(){
@@ -31,7 +37,7 @@ const updater=createGitHubUpdater({getCurrent:()=>active,apply:activateResources
 const extensionUpdater=createExtensionUpdater({currentVersion:extensionVersion});
 
 async function initialize(){
-  const settings=await chrome.storage.local.get({enabled:true,lastChecked:0,updateError:'',resourceLatest:'',resourceKnown:false,resourceError:'',extensionChecked:0,extensionLatest:'',extensionUrl:'',extensionError:'',extensionRequired:'',extensionKnown:false});
+  const settings=await chrome.storage.local.get({enabled:true,lastChecked:0,updateError:'',resourceLatest:'',resourceKnown:false,resourceError:'',extensionChecked:0,extensionLatest:'',extensionUrl:'',extensionCrxUrl:'',extensionError:'',extensionRequired:'',extensionKnown:false});
   enabled=settings.enabled!==false;
   lastChecked=Number.isSafeInteger(settings.lastChecked)?settings.lastChecked:0;
   updateError=typeof settings.updateError==='string'?settings.updateError.slice(0,500):'';
@@ -40,7 +46,8 @@ async function initialize(){
   resourceError=typeof settings.resourceError==='string'?settings.resourceError.slice(0,500):'';
   extensionChecked=Number.isSafeInteger(settings.extensionChecked)?settings.extensionChecked:0;
   extensionLatest=versionText(settings.extensionLatest)?settings.extensionLatest:'';
-  extensionUrl=typeof settings.extensionUrl==='string'&&/^https:\/\/github\.com\/longtail7989\/tamacolle-kor\/releases\/download\/resource-v\d+\.\d+\.\d+\/tamacolle-kor-\d+\.\d+\.\d+-extension\.zip$/.test(settings.extensionUrl)?settings.extensionUrl:'';
+  extensionUrl=savedExtensionUrl(settings.extensionUrl,'zip');
+  extensionCrxUrl=savedExtensionUrl(settings.extensionCrxUrl,'crx');
   extensionError=typeof settings.extensionError==='string'?settings.extensionError.slice(0,500):'';
   extensionRequired=versionText(settings.extensionRequired)?settings.extensionRequired:'';
   extensionKnown=settings.extensionKnown===true&&(settings.extensionLatest===''||versionText(settings.extensionLatest));
@@ -114,9 +121,10 @@ async function checkExtension(){
     if(result){
       extensionLatest=result.latest;
       extensionUrl=result.url||'';
+      extensionCrxUrl=result.crxUrl||'';
       extensionKnown=true;
     }
-    try{await chrome.storage.local.set({extensionChecked,extensionLatest,extensionUrl,extensionError,extensionKnown});}
+    try{await chrome.storage.local.set({extensionChecked,extensionLatest,extensionUrl,extensionCrxUrl,extensionError,extensionKnown});}
     catch(error){if(!failure){failure=error;extensionError='확장 업데이트 확인 상태를 저장하지 못했습니다.';}}
     broadcast();
     if(failure)throw failure;

@@ -31,16 +31,30 @@ jobs:
         with:
           node-version: '22'
       - name: Test resource updates and live runtime behavior
-        run: node --test tests/resources.mjs tests/runtime.mjs tests/extension-update.mjs
-      - name: Build deterministic allowlisted artifacts
-        run: node scripts/build.mjs --tag "$RELEASE_TAG"
-      - name: Publish ZIP, single JSON resource pack and checksums
+        run: node --test tests/resources.mjs tests/runtime.mjs tests/extension-update.mjs tests/crx.mjs
+      - name: Build deterministic ZIP and signed Android CRX
+        env:
+          CRX_SIGNING_KEY: ${{ secrets.CRX_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$CRX_SIGNING_KEY" ]; then
+            echo "::error::CRX_SIGNING_KEY must contain the existing private signing key before publishing."
+            exit 1
+          fi
+          umask 077
+          key_file="$RUNNER_TEMP/tamacolle-kor-crx-private.pem"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$CRX_SIGNING_KEY" > "$key_file"
+          node scripts/build.mjs --tag "$RELEASE_TAG" --crx-key "$key_file"
+      - name: Publish PC ZIP, Android CRX, resources and checksums
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           gh release create "$RELEASE_TAG" \
             dist/tamacolle-kor-*-extension.zip \
+            dist/tamacolle-kor-*-extension.crx \
             dist/tamacolle-kor-resources.json \
             dist/SHA256SUMS \
             --verify-tag \

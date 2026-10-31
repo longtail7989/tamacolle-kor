@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Dependency-free ZIP STORE: explicit files, stable order, fixed timestamps and attributes.
-import {readFile, lstat, mkdir, writeFile} from 'node:fs/promises';
+import {readFile, lstat, mkdir, realpath, writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {validatePack} from '../resource-pack.mjs';
+import {createCrx} from './crx.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const files = [
@@ -15,19 +16,47 @@ const files = [
   'popup.html', 'popup.js', 'popup.css', 'icons/icon16.png', 'icons/icon32.png',
   'icons/icon48.png', 'icons/icon128.png', 'resources/ko.json'
 ].sort();
-let tag;
+let tag, crxKeyPath;
+const usage = '사용법: node scripts/build.mjs [--tag resource-vX.Y.Z] [--crx-key /outside/repository/private-key.pem]';
 for (let i = 2; i < process.argv.length; i++) {
-  if (process.argv[i] === '--tag' && process.argv[i + 1] && tag === undefined) tag = process.argv[++i];
-  else throw Error('사용법: node scripts/build.mjs [--tag resource-vX.Y.Z]');
+  const argument = process.argv[i], value = process.argv[i + 1];
+  if (!value || value.startsWith('--')) throw Error(usage);
+  if (argument === '--tag' && tag === undefined) tag = process.argv[++i];
+  else if (argument === '--crx-key' && crxKeyPath === undefined) crxKeyPath = process.argv[++i];
+  else throw Error(usage);
 }
+
+function inside(directory, file) {
+  const relative = path.relative(directory, file);
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep));
+}
+
+async function readCrxKey(file) {
+  const absolute = path.resolve(file), repository = await realpath(root);
+  if (inside(root, absolute) || inside(repository, absolute)) throw Error('CRX signing key must be outside the repository tree.');
+  const parsed = path.parse(absolute);
+  let current = parsed.root, stat;
+  for (const part of absolute.slice(parsed.root.length).split(path.sep)) {
+    current = path.join(current, part);
+    stat = await lstat(current, {bigint: true});
+    if (stat.isSymbolicLink()) throw Error('CRX signing key path must not contain symlinks.');
+    if (current !== absolute && !stat.isDirectory()) throw Error('CRX signing key path must use real directories.');
+  }
+  if (!stat?.isFile()) throw Error('CRX signing key must be a regular PEM file.');
+  if (inside(repository, await realpath(absolute))) throw Error('CRX signing key must be outside the repository tree.');
+  return {pem: await readFile(absolute), stat};
+}
+
+const crxKey = crxKeyPath === undefined ? null : await readCrxKey(crxKeyPath);
 
 async function allowlistedFile(file) {
   const parts = file.split('/');
   let current = root;
   for (let i = 0; i < parts.length; i++) {
     current = path.join(current, parts[i]);
-    const stat = await lstat(current);
+    const stat = await lstat(current, {bigint: true});
     if (stat.isSymbolicLink() || (i === parts.length - 1 ? !stat.isFile() : !stat.isDirectory())) throw Error('일반 배포 파일만 허용합니다: ' + file);
+    if (i === parts.length - 1 && crxKey && stat.dev === crxKey.stat.dev && stat.ino === crxKey.stat.ino) throw Error('CRX signing key must not be an allowlisted distribution file: ' + file);
   }
   return readFile(current);
 }
@@ -94,11 +123,15 @@ end.writeUInt32LE(directory.length, 12);
 end.writeUInt32LE(offset, 16);
 const zip = Buffer.concat([...local, directory, end]);
 const zipName = `tamacolle-kor-${manifest.version}-extension.zip`;
+const crxName = `tamacolle-kor-${manifest.version}-extension.crx`;
+// Complete signing and all key validation before creating any release artifacts.
+const crx = crxKey ? createCrx(zip, crxKey.pem) : null;
 const resourceName = 'tamacolle-kor-resources.json';
 const checksum = (name, bytes) => createHash('sha256').update(bytes).digest('hex') + '  ' + name + '\n';
 const dist = path.join(root, 'dist');
 await mkdir(dist, {recursive: true});
 await writeFile(path.join(dist, zipName), zip);
 await writeFile(path.join(dist, resourceName), resources);
-await writeFile(path.join(dist, 'SHA256SUMS'), checksum(zipName, zip) + checksum(resourceName, resources));
-console.log(`${zipName}: ${files.length} allowlisted files, ${zip.length} bytes\n${resourceName}: ${resources.length} bytes, ${pack.texts.length} texts, ${pack.images.length} images, resource ${pack.version}\nSHA256SUMS`);
+if (crx) await writeFile(path.join(dist, crxName), crx.bytes);
+await writeFile(path.join(dist, 'SHA256SUMS'), checksum(zipName, zip) + checksum(resourceName, resources) + (crx ? checksum(crxName, crx.bytes) : ''));
+console.log(`${zipName}: ${files.length} allowlisted files, ${zip.length} bytes\n${resourceName}: ${resources.length} bytes, ${pack.texts.length} texts, ${pack.images.length} images, resource ${pack.version}${crx ? `\n${crxName}: ${crx.bytes.length} bytes, extension ID ${crx.id}` : ''}\nSHA256SUMS`);

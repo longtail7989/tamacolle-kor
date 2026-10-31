@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "타마코레 한글화",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "타마코레의 대사와 UI를 한국어로 표시합니다. GitHub에서 한글 리소스를 업데이트합니다.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms"],

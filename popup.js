@@ -1,6 +1,6 @@
 'use strict';
 const toggle=document.getElementById('enabled'),toggleText=document.getElementById('enabled-text'),version=document.getElementById('version'),update=document.getElementById('update'),status=document.getElementById('status');
-const extensionBox=document.getElementById('extension'),extensionLatest=document.getElementById('extension-latest'),extensionLink=document.getElementById('extension-link');
+const extensionBox=document.getElementById('extension'),extensionLatest=document.getElementById('extension-latest'),extensionPc=document.getElementById('extension-pc'),extensionAndroid=document.getElementById('extension-android'),extensionZipLink=document.getElementById('extension-zip-link'),extensionCrxLink=document.getElementById('extension-crx-link'),extensionReleaseLink=document.getElementById('extension-release-link');
 document.getElementById('extension-version').textContent=chrome.runtime.getManifest().version;
 const extensionServer=document.getElementById('extension-server'),resourceServer=document.getElementById('resource-server');
 function latestText(info){if(!info?.known)return info?.error?'확인 실패':'확인 전';const value=info.latest||'게시 없음';return info.error?value+'\n(확인 실패)':value;}
@@ -10,16 +10,19 @@ function renderExtension(state){
   const info=state?.extension;
   if(!info?.available){extensionBox.hidden=true;return;}
   extensionLatest.textContent=info.target;
-  extensionLink.href=info.url;
-  extensionLink.textContent=info.url.endsWith('.zip')?'확장 ZIP 내려받기':'공식 업데이트 안내 열기';
+  const zipUrl=info.url?.endsWith('.zip')?info.url:null;
+  extensionPc.hidden=!zipUrl;
+  extensionAndroid.hidden=!info.crxUrl;
+  for(const [link,url] of [[extensionZipLink,zipUrl],[extensionCrxLink,info.crxUrl],[extensionReleaseLink,zipUrl?null:info.url]]){
+    link.hidden=!url;
+    if(url)link.href=url;else link.removeAttribute('href');
+  }
   extensionBox.hidden=false;
 }
 function render(state){if(!state)return;currentState=state;toggle.checked=state.enabled;toggleText.textContent=state.enabled?'On':'Off';version.textContent=state.version||'—';extensionServer.textContent=latestText(state.extension);resourceServer.textContent=latestText(state.resource);toggle.disabled=changing;update.disabled=checking;renderExtension(state);}
 async function request(message){const response=await chrome.runtime.sendMessage(message);if(!response?.ok)throw Error(response?.error||'확장에 연결하지 못했습니다.');return response;}
 async function checkExtension(){
-  // A fresh extension ZIP is the only fix for a resource that requires a newer
-  // extension. The popup never downloads it automatically, because Chrome cannot
-  // replace an unpacked extension without the user's explicit reload.
+  // Extension packages require manual installation; this only checks metadata.
   try{const response=await request({type:'CHECK_EXTENSION'});if(!closed)render(response.state);}catch{}
 }
 toggle.addEventListener('change',async()=>{
