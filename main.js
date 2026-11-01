@@ -21,8 +21,8 @@ function syncNative(label,r){const candidates=nativeTemplates.candidates(r.raw,r
 const valid=x=>!!x&&(!window.cc?.isValid||window.cc.isValid(x));
 const candidate=text=>typeof text==='string'&&text.trim()&&text.length<=8192&&(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))||(config.translateLatin&&/[A-Za-z]/.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))));
 function choices(raw){return namesPolicy.candidates(raw,playerNames);}
-function boundSource(r,source){const candidates=[r.raw,...choices(r.raw).map(x=>x.source)];return candidates.includes(source)||(dialogue.isStory(r.context)&&candidates.some(x=>dialogue.equivalent(x,source)));}
-function rendered(r,text,source){if(text.includes('{TAMACOLLE_ACTOR_'))return null;if(!text.includes('{USER}'))return text;const alternatives=choices(r.raw),name=alternatives.find(x=>x.source===source||(dialogue.isStory(r.context)&&dialogue.equivalent(x.source,source)))?.name||(source===r.raw?alternatives[0]?.name:null)||(r.raw.includes('{USER}')?playerNames[0]:null);return namesPolicy.render(text,name);}
+function boundSource(r,source){if(r.duty?.source===source)return true;const candidates=[r.raw,...choices(r.raw).map(x=>x.source)];return candidates.includes(source)||(dialogue.isStory(r.context)&&candidates.some(x=>dialogue.equivalent(x,source)));}
+function rendered(r,text,source){if(text.includes('{TAMACOLLE_ACTOR_'))return null;if(r.duty?.source===source){const slot=text.indexOf('$v');return slot>=0&&slot===text.lastIndexOf('$v')?text.replace('$v',r.duty.value):null;}if(!text.includes('{USER}'))return text;const alternatives=choices(r.raw),name=alternatives.find(x=>x.source===source||(dialogue.isStory(r.context)&&dialogue.equivalent(x.source,source)))?.name||(source===r.raw?alternatives[0]?.name:null)||(r.raw.includes('{USER}')?playerNames[0]:null);return namesPolicy.render(text,name);}
 function applyText(label,r,text,source=r.raw){if(!boundSource(r,source))return false;const value=rendered(r,text,source);if(value===null)return false;r.templateText=text;r.cacheSource=source;const exact=source===r.raw||choices(r.raw).some(x=>x.source===source),positional=r.context==='TamacolleDialogue'||r.context==='TamacolleChoice';r.fullDisplay=exact&&!positional?value:dialogue.display(r.raw,value,positional);const projected=story.reveal(label,r.native,r.fullDisplay);r.displayComplete=projected===r.fullDisplay;display(label,r,projected);return true;}
 const nativeProtocol=globalThis[Symbol.for('tamacolle-kor-native-template-protocol.v1')];
 const usableResultName=text=>typeof text==='string'&&!!text.trim()&&text.length<=512&&!/[<>{}\r\n]/.test(text);
@@ -93,7 +93,7 @@ function context(label){const role=game.context(label);if(role)return role;const
 function ask(label,r){syncNative(label,r);if(!config.enabled||!config.configured||stopped||(!active(label)&&!game.allowInactive(label))||game.pending(label)||richChild(label)||game.bookNumber(label,r.native,config.target)!==null||(!candidate(r.raw)&&r.raw!=='{USER}'&&!choices(r.raw).length)||r.requested===r.raw)return;
  const cached=recalled(r.raw,r.nativeProvenance);if(cached!==undefined&&applyText(label,r,cached.text,cached.cacheSource)){r.requested=r.raw;r.resolved=true;return;}
  const resultNames=game.resultNames(label,r.native);if(resultNames){askResultNames(label,r,resultNames);return;}
- const alternatives=choices(r.raw);r.requested=r.raw;r.resolved=false;r.requestId='e'+epoch+'r'+(++sequence);byRequest.set(r.requestId,{label,r,provenance:r.nativeProvenance,scope:r.scope});const id=r.requestId,item={id,source:r.raw,context:context(label),...(alternatives.length?{templates:alternatives.map(x=>x.source)}:{}),...(r.nativeTemplates.length?{nativeTemplates:r.nativeTemplates}:{})};
+ const alternatives=choices(r.raw);if(r.duty)alternatives.unshift(r.duty);r.requested=r.raw;r.resolved=false;r.requestId='e'+epoch+'r'+(++sequence);byRequest.set(r.requestId,{label,r,provenance:r.nativeProvenance,scope:r.scope});const id=r.requestId,item={id,source:r.raw,context:context(label),...(alternatives.length?{templates:alternatives.map(x=>x.source)}:{}),...(r.nativeTemplates.length?{nativeTemplates:r.nativeTemplates}:{})};
  emit('CANDIDATE',{item});
 }
 function update(label,native,{preserve=false}={}){
@@ -106,6 +106,7 @@ function update(label,native,{preserve=false}={}){
  if(!r){r={raw,native,display:native,scope,fullDisplay:null,displayComplete:false,typingPlan:null,requested:null,requestId:null,style:null,resolved:false,wasActive:active(label)};records.set(label,r);}
  else if(raw!==r.raw||scope!==r.scope){reset(r);r.raw=raw;r.scope=scope;preserve=false;}
  r.context=context(label);
+ r.duty=r.context==='TamacolleDutyEffect'?nativeProtocol.dutyTemplate(raw):null;
  syncNative(label,r);
  r.native=native;
  const pending=r.context==='TamacolleDialogue'&&game.pending(label);

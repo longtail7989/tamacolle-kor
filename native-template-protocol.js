@@ -36,5 +36,11 @@ function bind(templateText,candidate,translatedNames){
  const result=templateText.replace(actor,token=>replacements.get(token));
  return result.length<=50000&&!result.includes('TAMACOLLE_ACTOR_')&&users(result)===expectedUsers?result:null;
 }
-globalThis[key]=Object.freeze({validate,size,bind});
+function dutyTemplate(source){
+ if(typeof source!=='string')return null;
+ const value=/([0-9]+(?:\.[0-9]+)?)(％?)$/.exec(source);
+ if(!value||value.index+value[0].length!==source.length||!source.slice(0,value.index).endsWith(' +'))return null;
+ return {source:source.slice(0,value.index)+'$v'+value[2],value:value[1]};
+}
+globalThis[key]=Object.freeze({validate,size,bind,dutyTemplate});
 })();

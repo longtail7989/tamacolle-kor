@@ -4,6 +4,7 @@ import {webcrypto} from 'node:crypto';
 import {test} from 'node:test';
 import vm from 'node:vm';
 import battleFixture from './battle-fixture.js';
+import {createTextIndex,lookupText} from '../resource-pack.mjs';
 
 const root=new URL('../',import.meta.url);
 const source=file=>readFileSync(new URL(file,root),'utf8');
@@ -159,6 +160,16 @@ test('manor notifications and expedition durations preserve quantities without t
  notice.string='魂玉の所持量が上限になりました';assert.equal(notice.string,'혼옥 보유량이 상한에 도달했습니다');
  for(const [duration,expected]of [['1時間','1시간'],['45分','45분'],['30秒','30초'],['1時間2分3秒','1시간 2분 3초'],['','']]){time.string='部隊Lv.5～\n所要時間 '+duration;assert.equal(time.string,'부대 Lv.5 이상\n소요시간 '+expected);}
  f.config('1.0.0',2,false);assert.equal(notice.string,'魂玉の所持量が上限になりました');assert.equal(time.string,'部隊Lv.5～\n所要時間 ');f.app.dispose();
+});
+
+test('changing duty effects use approved templates only for native-owned labels and Off restores quantities',()=>{
+ const f=engineFixture(),node=f.node('toubanSet',f.canvas),effect=new f.cc.Label(f.node('koukaLabel',node),'回避率上昇 +4％'),bonus=new f.cc.Label(f.node('koukaLabelP',node),'敵クリ魂排出量上昇 +1.5'),other=new f.cc.Label(f.node('koukaLabel',node),'回避率上昇 +4％');
+ const duty={kind:'SyouenTouban',node:f.manager.node,kouka:[effect],koukaP:[bonus]};f.manager.node._components.push(duty);f.manager.syouen={touban:duty};
+ const index=createTextIndex({texts:[{source:'回避率上昇 +$v％',text:'회피율 증가 +$v％',context:''},{source:'敵クリ魂排出量上昇 +$v',text:'적 크리혼 배출량 증가 +$v',context:''}]});
+ const reply=()=>{for(const message of f.messages.filter(m=>m.type==='CANDIDATE')){const result=lookupText(index,message.item);if(result)f.result('1.0.0',1,result.id,result.text,result.cacheSource);}};
+ f.activate('1.0.0',1);reply();assert.equal(effect.string,'회피율 증가 +4％');assert.equal(bonus.string,'적 크리혼 배출량 증가 +1.5');assert.equal(other.string,'回避率上昇 +4％');
+ effect.string='回避率上昇 +12％';bonus.string='敵クリ魂排出量上昇 +2';reply();assert.equal(effect.string,'회피율 증가 +12％');assert.equal(bonus.string,'적 크리혼 배출량 증가 +2');
+ f.config('1.0.0',2,false);assert.equal(effect.string,'回避率上昇 +12％');assert.equal(bonus.string,'敵クリ魂排出量上昇 +2');f.app.dispose();
 });
 
 test('expedition list durations localize only the bound StageBtn information label and preserve numbers',()=>{
@@ -376,4 +387,15 @@ test('verified BattleEvent labels retain exact LF and reject UI, old stage and r
  f.bridge('RESULT',{version:'1.0.0',generation:3,results:[{id:treasure.id,text:'승인된 보물 문장',cacheSource:treasure.source,nativeTemplates:treasure.nativeTemplates}]});assert.equal(battle.label.string,'승인된 보물 문장');
  f.activate('1.1.0',4);assert.equal(battle.label.string,'赤の宝。');f.bridge('RESULT',{version:'1.0.0',generation:3,results:[{id:treasure.id,text:'오래된 리소스',cacheSource:treasure.source,nativeTemplates:treasure.nativeTemplates}]});assert.equal(battle.label.string,'赤の宝。');
  f.app.dispose();for(const [key,original]of battle.originals){const [owner,method]=key.split('.');assert.equal(battle[owner][method],original);}
+});
+
+test('relay accepts only reconstructed numeric duty aliases, not arbitrary UI templates',async()=>{
+ const f=bridgeFixture();f.state.resolve({ok:true,state:{enabled:true,version:'1.0.0'}});await turn();f.catalogs[0].resolve({ok:true,version:'1.0.0',catalog:[]});await turn();
+ const revision=f.messages.at(-1),send=item=>f.receive('engine','CANDIDATE',{item,version:revision.version,generation:revision.generation});
+ send({id:'e1r1',source:'回避率上昇 +4％',context:'TamacolleDutyEffect',templates:['回避率上昇 +$v％']});f.flushTimers();equalLookups();
+ function equalLookups(){assert.equal(f.lookups.length,1);}
+ for(const [index,change]of [
+  {context:'Menu'}, {templates:['命中率上昇 +$v％']}, {source:'回避率上昇 +NaN％'}, {source:'回避率上昇 +4\n％'},
+ ].entries())send({id:'e1r'+(index+2),source:'回避率上昇 +4％',context:'TamacolleDutyEffect',templates:['回避率上昇 +$v％'],...change});
+ f.flushTimers();equalLookups();
 });

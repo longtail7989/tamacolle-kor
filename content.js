@@ -59,7 +59,7 @@ function connect(){
   keepWarm();
  }catch{}
 }
-function validItem(item){return !!item&&typeof item.id==='string'&&/^e\d+r\d+$/.test(item.id)&&item.id.length<=80&&typeof item.source==='string'&&!!item.source.trim()&&item.source.length<=8192&&typeof item.context==='string'&&item.context.length<=300&&(item.templates===undefined||(Array.isArray(item.templates)&&item.templates.length<=8&&item.templates.every(value=>typeof value==='string'&&!!value.trim()&&value.length<=8192&&value.includes('{USER}'))&&new Set(item.templates).size===item.templates.length))&&nativeProtocol.validate(item.nativeTemplates)&&itemSize(item)<=131072;}
+function validItem(item){return !!item&&typeof item.id==='string'&&/^e\d+r\d+$/.test(item.id)&&item.id.length<=80&&typeof item.source==='string'&&!!item.source.trim()&&item.source.length<=8192&&typeof item.context==='string'&&item.context.length<=300&&(item.templates===undefined||(Array.isArray(item.templates)&&item.templates.length<=8&&item.templates.every(value=>typeof value==='string'&&!!value.trim()&&value.length<=8192&&(value.includes('{USER}')||(item.context==='TamacolleDutyEffect'&&nativeProtocol.dutyTemplate(item.source)?.source===value)))&&new Set(item.templates).size===item.templates.length))&&nativeProtocol.validate(item.nativeTemplates)&&itemSize(item)<=131072;}
 function scheduleLookup(){
  const priority=[...pending.values()].some(urgent);
  if(!enabled||!pending.size||lookupFlights>=(priority?4:3))return;

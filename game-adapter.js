@@ -51,7 +51,15 @@ function create({getEngine,nativeText}){
   const result=manager?.battle?.result;
   return label===manager?.infoTelop?.infoTelopLabel||label===manager?.gotItemLabel||label===scenario?.titleLabel||label===scenario?.subTitleLabel||(label===scenario?.serifWaku?.serif&&plannedFull(scenario,scenario.serifWaku)!==null)||(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName);
  }
- function context(label){const {manager,scenario,waku}=bind();if(label===waku?.serif)return 'TamacolleDialogue';if(label===waku?.namae)return 'TamacolleSpeaker';if(label===waku?.selectLabel)return 'TamacolleChoice';if(label===scenario?.titleLabel||label===scenario?.subTitleLabel)return 'TamacolleTitle';if(label===scenario?.logLabel)return 'TamacolleBacklog';const result=manager?.battle?.result;if(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName)return 'TamacolleResultNames';if(label===battleEvent()?.label)return 'TamacolleDialogue / BattleEvent';return null;}
+ function context(label){
+  const {manager,scenario,waku}=bind();
+  if(label===waku?.serif)return 'TamacolleDialogue';if(label===waku?.namae)return 'TamacolleSpeaker';if(label===waku?.selectLabel)return 'TamacolleChoice';
+  if(label===scenario?.titleLabel||label===scenario?.subTitleLabel)return 'TamacolleTitle';if(label===scenario?.logLabel)return 'TamacolleBacklog';
+  const duty=manager?.syouen?.touban;
+  if(valid(duty)&&component(duty.node,'SyouenTouban')===duty&&(duty.kouka?.includes(label)||duty.koukaP?.includes(label)))return 'TamacolleDutyEffect';
+  const result=manager?.battle?.result;if(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName)return 'TamacolleResultNames';
+  if(label===battleEvent()?.label)return 'TamacolleDialogue / BattleEvent';return null;
+ }
  function resultNames(label,native){
   if(typeof native!=='string'||native.length>8192)return null;
   const {manager}=bind(),result=manager?.battle?.result,master=manager?.master?.kunitama;
