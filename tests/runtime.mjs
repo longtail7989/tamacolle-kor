@@ -46,6 +46,15 @@ function engineFixture(){
  return {...h,node,scene,canvas,cc,serif,speaker,waku,manager,scenario,images,app,bridge,config,activate,result,frame};
 }
 
+function nativeStoryFixture(pages){
+ const f=engineFixture(),owner=f.scenario;
+ owner.characters=[{chara:'A',name:'赤',body:'danji_1'},{chara:'B',name:'青',body:'danji_2'}];owner.scenarioSplit=pages;owner.scenarioP=0;owner.GV={play:f.manager.GV.play};
+ owner.StrMod=function(input){return input.replace(/\$([AB])/g,(_,tag)=>this.characters.find(actor=>actor.chara===tag).name);};
+ owner.TextStart=function(text,caption,first,last){text=this.StrMod(text);this.StrMod(caption);const select=text.split('?');if(select.length>1){f.waku.selectable=true;f.waku.ShowSelect(select[1]);return;}if(first)f.waku.tmpserif='';if(!f.waku.tmpserif)f.waku.tmpserif='\n';f.waku.tmpserif+=text;f.waku.last=last;f.waku.count=f.waku.tmpserif.length;f.serif.string=f.waku.tmpserif;};
+ f.app.refresh();
+ return f;
+}
+
 test('live version changes repaint current text, reject stale replies, and Off restores native style',()=>{
  const f=engineFixture();f.activate('1.0.0',1);
  const request=f.messages.findLast(message=>message.type==='CANDIDATE'&&message.item.source==='\n出発しよう。');
@@ -261,6 +270,95 @@ test('native MAIN capture survives Off and rejects stale same-source combination
  f.activate('1.1.0',4);assert.equal(f.serif.string,'\n赤青','resource update discards derived display memory');
  f.bridge('RESULT',{version:'1.0.0',generation:3,results:[{id:second.id,text:'오래된 리소스',cacheSource:second.source,nativeTemplates:second.nativeTemplates}]});assert.equal(f.serif.string,'\n赤青');
  f.app.dispose();assert.equal(owner.StrMod,nativeStrMod);assert.equal(owner.TextStart,nativeTextStart);
+});
+
+test('native multipart dialogue requests the full page at its first fragment and reveals Korean cumulatively',()=>{
+ const f=nativeStoryFixture(['text \n前半。,wait 0.5,text 中盤。,wait 0.5,text 終わり。']),owner=f.scenario,full='\n前半。中盤。終わり。',translated='\n처음에는 천천히 말하고 다음에는 계속해서 마지막까지 말한다.';
+ f.activate('1.0.0',1);owner.TextStart('前半。','',true,false);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue'&&m.item.source===full)?.item;
+ assert.ok(request,'the first native fragment requests the complete current page');
+ assert.equal(f.waku.tmpserif,'\n前半。');assert.equal(f.waku.last,false);
+ const nativeCount=f.waku.count;
+ f.result('1.0.0',1,request.id,translated,request.source);
+ const first=f.serif.string;assert.ok(first.length>1&&translated.startsWith(first));assert.notEqual(first,translated,'finishing a nonfinal native fragment must not reveal the whole Korean page');
+ assert.equal(f.waku.tmpserif,'\n前半。');assert.equal(f.waku.count,nativeCount);assert.equal(f.waku.last,false);
+ owner.TextStart('中盤。','',false,false);
+ const second=f.serif.string;assert.ok(second.length>first.length&&translated.startsWith(second));assert.notEqual(second,translated);
+ assert.equal(f.waku.tmpserif,'\n前半。中盤。');assert.equal(f.waku.count,f.waku.tmpserif.length);assert.equal(f.waku.last,false);
+ assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.source===full).length,1,'later fragments keep the same full-page lookup');
+ owner.TextStart('終わり。','',false,true);
+ assert.equal(f.serif.string,translated);assert.equal(f.waku.tmpserif,full);assert.equal(f.waku.last,true);f.app.dispose();
+});
+
+test('early dialogue results cannot paint a later page with identical native text',()=>{
+ const page='text \n同じ始まり。,wait 0.5,text 同じ終わり。',f=nativeStoryFixture([page,page]),owner=f.scenario,full='\n同じ始まり。同じ終わり。';
+ f.activate('1.0.0',1);owner.TextStart('同じ始まり。','',true,false);
+ const first=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;assert.ok(first);
+ owner.scenarioP=1;owner.TextStart('同じ始まり。','',true,false);
+ const next=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;assert.ok(next);assert.notEqual(next.id,first.id,'a new page occurrence must not inherit the pending request');
+ f.result('1.0.0',1,first.id,'\n이전 페이지의 번역입니다.',first.source);assert.equal(f.serif.string,'\n同じ始まり。');
+ const translated='\n다음 페이지의 올바른 번역입니다.';f.result('1.0.0',1,next.id,translated,next.source);
+ assert.ok(f.serif.string.length>1&&translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ owner.TextStart('同じ終わり。','',false,true);assert.equal(f.serif.string,translated);f.app.dispose();
+});
+
+test('early dialogue replies are bound to the live profile and cannot survive Off',()=>{
+ const f=nativeStoryFixture(['text \n名前を呼ぶ。,wait 0.5,text まだ続く。']),owner=f.scenario,full='\n名前を呼ぶ。まだ続く。';
+ f.activate('1.0.0',1);owner.TextStart('名前を呼ぶ。','',true,false);
+ const first=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;assert.ok(first);
+ const profile={playerName:f.manager.GV.play.playerName};owner.GV.play=profile;f.manager.GV.play=profile;f.app.refresh();
+ f.result('1.0.0',1,first.id,'\n이전 프로필의 번역입니다.',first.source);assert.equal(f.serif.string,'\n名前を呼ぶ。');
+ owner.TextStart('名前を呼ぶ。','',true,false);
+ const rebound=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;assert.ok(rebound);assert.notEqual(rebound.id,first.id);
+ f.config('1.0.0',2,false);f.result('1.0.0',1,rebound.id,'\n꺼진 뒤 도착한 번역입니다.',rebound.source);
+ assert.equal(f.serif.string,'\n名前を呼ぶ。');assert.equal(f.serif.fontFamily,'JP');assert.equal(f.waku.tmpserif,'\n名前を呼ぶ。');assert.equal(f.waku.last,false);
+ f.config('1.0.0',3,true);
+ const live=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;assert.ok(live);assert.notEqual(live.id,rebound.id);
+ f.result('1.0.0',3,rebound.id,'\n다시 켜기 전의 번역입니다.',rebound.source);assert.equal(f.serif.string,'\n名前を呼ぶ。');
+ const translated='\n현재 프로필에서 이어지는 올바른 번역입니다.';f.result('1.0.0',3,live.id,translated,live.source);assert.ok(translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ owner.TextStart('まだ続く。','',false,true);assert.equal(f.serif.string,translated);f.app.dispose();
+});
+
+test('early native page lookup preserves protagonist provenance and future actor bindings',()=>{
+ const f=nativeStoryFixture(['text \n*P、$A。,wait 0.5,text $Bも進む。']),owner=f.scenario;
+ owner.characters[0].name=f.manager.GV.play.playerName;f.app.refresh();f.activate('1.0.0',1);
+ owner.TextStart('ミナト、$A。','',true,false);
+ const full='\nミナト、ミナト。青も進む。',request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source===full)?.item;
+ assert.ok(request,'future StrMod fragments must already contribute their approved bindings');
+ assert.equal(request.nativeTemplates[0].source,'{USER}、{TAMACOLLE_ACTOR_0}。{TAMACOLLE_ACTOR_1}も進む。');
+ assert.deepEqual(Array.from(request.nativeTemplates[0].bindings,binding=>[binding.token,binding.source]),[['{TAMACOLLE_ACTOR_0}','ミナト'],['{TAMACOLLE_ACTOR_1}','青']],'an actor spelled like the profile remains actor-bound');
+ const translated='\nミナト님, 미나토와 아오도 함께 나아간다.';
+ f.bridge('RESULT',{version:'1.0.0',generation:1,results:[{id:request.id,text:'{USER}님, 미나토와 아오도 함께 나아간다.',cacheSource:request.source,nativeTemplates:request.nativeTemplates}]});
+ assert.ok(f.serif.string.length>1&&translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);assert.ok(!/\{USER\}|\{TAMACOLLE_ACTOR_/.test(f.serif.string));
+ owner.TextStart('$Bも進む。','',false,true);
+ assert.equal(f.serif.string,translated);assert.equal(f.waku.tmpserif,full);assert.equal(f.manager.GV.play.playerName,'ミナト');f.app.dispose();
+});
+
+test('unverified native fragments retain Japanese until a complete observed page is safe',()=>{
+ const f=nativeStoryFixture(['text \n予定の前半。,wait 0.5,text 予定の後半。']),owner=f.scenario;
+ f.activate('1.0.0',1);
+ owner.TextStart('異なる前半。','',true,true);
+ const cached=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source==='\n異なる前半。').item;
+ f.result('1.0.0',1,cached.id,'\n이전의 독립된 문장입니다.',cached.source);assert.equal(f.serif.string,'\n이전의 독립된 문장입니다.');
+ const before=f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length;
+ owner.TextStart('異なる前半。','',true,false);
+ assert.equal(f.serif.string,'\n異なる前半。');assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length,before,'a fragment that does not match the current native page is not guessed');
+ owner.TextStart('観測した後半。','',false,true);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.source==='\n異なる前半。観測した後半。')?.item;assert.ok(request,'the original complete-page fallback remains available');
+ f.result('1.0.0',1,request.id,'\n완전히 관측된 페이지입니다.',request.source);assert.equal(f.serif.string,'\n완전히 관측된 페이지입니다.');f.app.dispose();
+});
+
+test('native choice pages do not speculate a dialogue page and keep the ordinary choice lookup',()=>{
+ const f=nativeStoryFixture(['text \n選ぶ前の文章。,wait 0.5,text ?進む?戻る']),owner=f.scenario;
+ f.waku.selectLabel=new f.cc.Label(f.node('Select',f.serif.node.parent),'');f.waku.ShowSelect=function(text){this.selectLabel.string=text;};f.app.refresh();f.activate('1.0.0',1);
+ const before=f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length;
+ owner.TextStart('選ぶ前の文章。','',true,false);
+ assert.equal(f.serif.string,'\n選ぶ前の文章。');assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length,before,'a future native choice must not be concatenated into a guessed dialogue page');
+ owner.TextStart('?進む?戻る','',false,true);
+ assert.equal(f.waku.selectable,true);assert.equal(f.waku.selectLabel.string,'進む');assert.equal(f.waku.tmpserif,'\n選ぶ前の文章。');assert.equal(f.serif.string,'\n選ぶ前の文章。');
+ assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length,before);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleChoice'&&m.item.source==='進む')?.item;assert.ok(request);
+ f.result('1.0.0',1,request.id,'나아간다',request.source);assert.equal(f.waku.selectLabel.string,'나아간다');assert.equal(f.serif.string,'\n選ぶ前の文章。');f.app.dispose();
 });
 
 test('verified BattleEvent labels retain exact LF and reject UI, old stage and resource bindings',()=>{

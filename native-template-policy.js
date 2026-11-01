@@ -3,7 +3,7 @@
 const KEY=Symbol.for('tamacolle-kor-native-template-policy.v1');
 const protocol=globalThis[Symbol.for('tamacolle-kor-native-template-protocol.v1')];
 if(!protocol)throw Error('Native template protocol unavailable');
-function create({getEngine,game,dialogue,namesPolicy,getNames}){
+function create({getEngine,game,dialogue,namesPolicy,getNames,onDialogueStart}){
  const battleCapture=createBattleCapture({game,getNames});
  let disposed=false,owner=null,blocked=null,scene=null,engine=null,scenarioSplit=null,profile=null,identity='',hooks=[],frame=null,page=null,bytes=0;
  const aliases=new Map();
@@ -36,7 +36,7 @@ function create({getEngine,game,dialogue,namesPolicy,getNames}){
  function install(key,make){const original=owner[key],descriptor=Object.getOwnPropertyDescriptor(owner,key);if(typeof original!=='function'||descriptor&&(!('value' in descriptor)||descriptor.writable===false))return false;const wrapper=make(original);try{Object.defineProperty(owner,key,{configurable:true,writable:true,enumerable:descriptor?.enumerable??false,value:wrapper});}catch{return false;}hooks.push({key,descriptor,wrapper});return true;}
  function attach(){
   if(typeof owner.StrMod!=='function'||typeof owner.TextStart!=='function')return;
-  const target=owner;
+  const target=owner,nativeStrMod=owner.StrMod;
   if(!install('StrMod',original=>function(input){
    // Native failures propagate unchanged; capture is strictly after the real call.
    const output=original.apply(this,arguments),call=frame;
@@ -45,9 +45,26 @@ function create({getEngine,game,dialogue,namesPolicy,getNames}){
   }))return;
   if(!install('TextStart',original=>function(text,caption,first,last){
    refresh();const previous=frame;
-   if(this!==owner||!identity)return original.apply(this,arguments);
+   if(this!==owner||owner===blocked||!identity)return original.apply(this,arguments);
+   if(first===true)try{
+    const actors=this.characters.map(actor=>[actor.chara,actor.name,actor.body]);
+    const unchanged=()=>{
+     if(owner!==target||owner===blocked||!Array.isArray(target.characters)||target.characters.length!==actors.length)return false;
+     for(let i=0;i<actors.length;i++){const actor=target.characters[i],saved=actors[i];if(!actor||actor.chara!==saved[0]||actor.name!==saved[1]||actor.body!==saved[2])return false;}
+     for(const hook of hooks)if(target[hook.key]!==hook.wrapper)return false;
+     return true;
+    };
+    const prepared=game.prepareDialogue(this,text,caption,first,last,parts=>{
+     const value={source:'\n',output:'\n',bindings:[]};
+     for(const part of parts){const captured=capture(part,nativeStrMod.call(target,part),nativeStrMod);if(!captured||!appendCapture(value,captured))return null;}
+     return value;
+    },unchanged);
+    if(prepared)store(prepared);
+   }catch{}
    const call={owner:this,calls:0,first:!!first,last:!!last};frame=call;
-   try{return original.apply(this,arguments);}finally{frame=previous;}
+   let result;try{result=original.apply(this,arguments);}finally{frame=previous;}
+   if(typeof onDialogueStart==='function')try{onDialogueStart(this.serifWaku?.serif);}catch{}
+   return result;
   })){restore();}
  }
  function capture(input,output,original){
@@ -73,6 +90,12 @@ function create({getEngine,game,dialogue,namesPolicy,getNames}){
   aliases.set(key,{entry,cost});bytes+=cost;
   while(aliases.size>128||bytes>524288){const oldest=aliases.keys().next().value;bytes-=aliases.get(oldest).cost;aliases.delete(oldest);}
  }
+ function appendCapture(target,value){
+  const base=target.bindings.length;if(base+value.bindings.length>32)return false;
+  const source=value.source.replace(/\{TAMACOLLE_ACTOR_(\d+)\}/g,(_,number)=>'{TAMACOLLE_ACTOR_'+(base+Number(number))+'}');
+  target.source+=source;target.output+=value.output;target.bindings.push(...value.bindings.map((binding,i)=>({token:'{TAMACOLLE_ACTOR_'+(base+i)+'}',source:binding.source})));
+  return target.source.length<=8192&&target.output.length<=8192;
+ }
  function observe(input,output,original,index,call){
   const now=current();if(now.value!==owner||now.root!==scene||!eligible(owner)||signature(owner)!==identity){clear();return;}
   const value=capture(input,output,original);
@@ -88,11 +111,7 @@ function create({getEngine,game,dialogue,namesPolicy,getNames}){
   // SerifWaku.ShowSerif inserts exactly one LF only when its native buffer is empty.
   if(call.first)page={source:'\n',output:'\n',bindings:[]};
   if(!page)return;
-  const base=page.bindings.length;if(base+value.bindings.length>32){page=null;return;}
-  let source=value.source;
-  source=source.replace(/\{TAMACOLLE_ACTOR_(\d+)\}/g,(_,number)=>'{TAMACOLLE_ACTOR_'+(base+Number(number))+'}');
-  page.source+=source;page.output+=output;page.bindings.push(...value.bindings.map((binding,i)=>({token:'{TAMACOLLE_ACTOR_'+(base+i)+'}',source:binding.source})));
-  if(page.source.length>8192||page.output.length>8192){page=null;return;}
+  if(!appendCapture(page,value)){page=null;return;}
   if(call.last)store(page);
  }
  function candidates(source,context,label){

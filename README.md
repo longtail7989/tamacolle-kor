@@ -19,7 +19,7 @@
 
 ## Android Edge Canary — 시험 지원
 
-최신 Release의 **`-extension.crx`** 파일을 사용합니다. **모바일 실기기 설치·게임 번역은 아직 미검증**인 시험 지원입니다. 일반 Edge 안정판과 iOS는 이 설치 안내의 지원 대상이 아닙니다.
+최신 Release의 **`-extension.crx`** 파일을 사용합니다. 기기·브라우저 버전에 따라 동작이 달라질 수 있는 **시험 지원**입니다. 일반 Edge 안정판과 iOS는 이 설치 안내의 지원 대상이 아닙니다.
 
 1. Android에 **Microsoft Edge Canary**를 설치합니다.
 2. `설정 → Edge 정보`에서 버전 번호를 반복해서 눌러 개발자 메뉴를 활성화합니다.

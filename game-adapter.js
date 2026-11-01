@@ -1,9 +1,10 @@
 /* MAIN: verified Tamacolle display state and original log preservation; never credentials or game actions. */
 (()=>{'use strict';
 const KEY=Symbol.for('tamacolle-kor-game-adapter.v1');if(window[KEY])return;
+const pageCommands=new Set('face talk say talkend showex show hideall hide move scale rotate quake shake panel color order orderline setline moveline bg cg minibg light shakebg bgm se voice telopreset telopoutline telopcolor telopscale telopsize telop telopseq ruby wait playeryes playerno place noskip title effect waku fadein fadeout fadecolor lightcolor flow textcolor textsize serif'.split(' '));
 function create({getEngine,nativeText}){
  let scene=null,manager=null,scenario=null;const rubyOpacity=new Map(),logHooks=new Map();
- let terminalPage=null;
+ let terminalPage=null,preparedPage=null,currentDialogueScope=null,dialogueOccurrence=0;
  const valid=value=>!!value&&(!getEngine()?.isValid||getEngine().isValid(value));
  const child=(node,name)=>node?.children?.find(value=>value.name===name);
  const component=(node,name)=>(node?._components||[]).find(value=>getEngine()?.js?.getClassName?.(value)===name);
@@ -48,7 +49,7 @@ function create({getEngine,nativeText}){
  function allowInactive(label){
   if(!valid(label))return false;const {manager,scenario}=bind();
   const result=manager?.battle?.result;
-  return label===manager?.infoTelop?.infoTelopLabel||label===manager?.gotItemLabel||label===scenario?.titleLabel||label===scenario?.subTitleLabel||(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName);
+  return label===manager?.infoTelop?.infoTelopLabel||label===manager?.gotItemLabel||label===scenario?.titleLabel||label===scenario?.subTitleLabel||(label===scenario?.serifWaku?.serif&&plannedFull(scenario,scenario.serifWaku)!==null)||(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName);
  }
  function context(label){const {manager,scenario,waku}=bind();if(label===waku?.serif)return 'TamacolleDialogue';if(label===waku?.namae)return 'TamacolleSpeaker';if(label===waku?.selectLabel)return 'TamacolleChoice';if(label===scenario?.titleLabel||label===scenario?.subTitleLabel)return 'TamacolleTitle';if(label===scenario?.logLabel)return 'TamacolleBacklog';const result=manager?.battle?.result;if(valid(result)&&component(result.node,'ResultGamen')===result&&label===result.finalKunitamaName)return 'TamacolleResultNames';if(label===battleEvent()?.label)return 'TamacolleDialogue / BattleEvent';return null;}
  function resultNames(label,native){
@@ -135,6 +136,71 @@ function create({getEngine,nativeText}){
   for(const value of native.slice(0,-1)){const n=value==='〇'?0:'零一二三四五六七八九'.indexOf(value);if(n>=0)digit=n;else{number+=(digit||1)*(value==='十'?10:100);digit=0;}}
   return 'No. '+(number+digit);
  }
+ function dialogueScope(label){
+  const {scenario:owner,waku}=bind();if(!waku||label!==waku.serif)return null;
+  const split=owner?.scenarioSplit,page=owner?.scenarioP,script=split?.[page],profile=owner?.GV?.play??manager?.GV?.play,name=profile?.playerName,starter=owner?.GV?.stat?.firstDanjiID;
+  const previous=currentDialogueScope;
+  if(!previous||previous.owner!==owner||previous.waku!==waku||previous.split!==split||previous.page!==page||previous.script!==script||previous.profile!==profile||previous.name!==name||previous.starter!==starter||previous.occurrence!==dialogueOccurrence)currentDialogueScope={owner,waku,split,page,script,profile,name,starter,occurrence:dialogueOccurrence};
+  return currentDialogueScope;
+ }
+ function prepareDialogue(owner,text,caption,first,last,resolve,isCurrent){
+  const binding=bind();if(owner!==binding.scenario||!binding.waku||first!==true)return null;
+  dialogueOccurrence++;currentDialogueScope=null;preparedPage=null;
+  const scope=dialogueScope(binding.waku.serif);
+  if(!Number.isSafeInteger(scope.page)||scope.page<0||typeof scope.script!=='string'||scope.script.length>65536||typeof text!=='string'||typeof caption!=='string')return null;
+  try{
+   let script=scope.script;
+   if(script.includes('*P')){
+    if(typeof scope.name!=='string'||/[,&\r\n]/.test(scope.name))return null;
+    script=script.split('*P').join(scope.name);
+   }
+   if(script.includes('*MAIN')){
+    const gm=owner.gm;
+    if(!gm||typeof gm.GetName!=='function'||!Number.isSafeInteger(scope.starter))return null;
+    const name=gm.GetName(1,scope.starter);
+    if(typeof name!=='string'||!name||name.length>512||/[,&\r\n]/.test(name))return null;
+    script=script.split('*MAIN').join(name);
+   }
+   const commands=script.split(','),chunks=[];
+   for(let index=0;index<commands.length;index++){
+    const command=commands[index],group=command.split('&');
+    if(group.length>1){
+     for(let part=0;part<group.length;part++){
+      const head=group[part].split(' ')[0].toLowerCase();
+      if(head==='delay'){
+       if(part+1>=group.length||!Number.isFinite(Number(group[part].slice(6)))||Number(group[part].slice(6))<0)return null;
+       continue;
+      }
+      if(!pageCommands.has(head))return null;
+     }
+     continue;
+    }
+    if(command.startsWith('text ')){
+     const lines=command.slice(5).split('\n');
+     if(!chunks.length&&lines[0]==='')lines.shift();
+     let name='';if(lines[0]?.startsWith('@'))name=lines.shift().slice(1);
+     chunks.push({text:lines.join('\n'),caption:name,last:index===commands.length-1});
+     if(chunks.length>128)return null;
+    }else if(command){
+     const head=command.split(' ')[0].toLowerCase();
+     if(head==='end'){if(index!==commands.length-1)return null;}
+     else if(!pageCommands.has(head))return null;
+    }
+   }
+   if(!chunks.length||chunks[0].text!==text||chunks[0].caption!==caption||chunks[0].last!==(last===true))return null;
+   const parts=chunks.map(chunk=>chunk.text),value=resolve(parts);
+   if(!value||typeof value.output!=='string'||!value.output.startsWith('\n')||value.output.length>8192||value.output.includes('?')||!isCurrent())return null;
+   preparedPage={scope,full:value.output,isCurrent};
+   return value;
+  }catch{return null;}
+ }
+ function plannedFull(owner,waku){
+  if(!preparedPage)return null;
+  if(preparedPage.scope!==dialogueScope(waku?.serif)||preparedPage.scope.owner!==owner||!preparedPage.isCurrent()){preparedPage=null;return null;}
+  // Native Init may clear the label before clearing the previous buffer.
+  if(typeof waku?.tmpserif!=='string'||!preparedPage.full.startsWith(waku.tmpserif))return null;
+  return preparedPage.full;
+ }
  function completePage(owner,waku){
   if(waku.last===true)return true;
   const split=owner?.scenarioSplit,page=owner?.scenarioP,script=split?.[page],name=owner?.GV?.play?.playerName??manager?.GV?.play?.playerName;
@@ -153,15 +219,17 @@ function create({getEngine,nativeText}){
   return terminalPage.full!==null&&terminalPage.full===waku.tmpserif;
  }
  function frame(label,native){
-  const {scenario:owner,waku}=bind();if(!waku||label!==waku.serif||typeof native!=='string'||typeof waku.tmpserif!=='string'||!completePage(owner,waku))return null;
-  const full=waku.tmpserif;
-  // ShowAllText deliberately does not advance count; the exact full native write is authoritative.
-  if(native===full)return {full,length:full.length,shown:full.length};
+  const {scenario:owner,waku}=bind();if(!waku||label!==waku.serif||typeof native!=='string'||typeof waku.tmpserif!=='string')return null;
+  const prepared=plannedFull(owner,waku);
+  if(prepared===null&&!completePage(owner,waku))return null;
+  const full=prepared??waku.tmpserif;
+  // ShowAllText completes the current buffer, not text fragments still scheduled later.
+  if(native===waku.tmpserif)return {full,length:full.length,shown:native.length};
   if(!Number.isFinite(waku.count)||waku.count<0)return null;
-  const shown=Math.min(Math.trunc(waku.count),full.length);
+  const shown=Math.min(Math.trunc(waku.count),waku.tmpserif.length);
   return full.substring(0,shown)===native?{full,length:full.length,shown}:null;
  }
- function pending(label){const {scenario:owner,waku}=bind();return label===waku?.serif&&!completePage(owner,waku);}
+ function pending(label){const {scenario:owner,waku}=bind();return label===waku?.serif&&plannedFull(owner,waku)===null&&!completePage(owner,waku);}
  function names(){const name=bind().manager?.GV?.play?.playerName;return typeof name==='string'?[name]:[];}
  function restoreRuby(){for(const [node,opacity]of rubyOpacity)if(valid(node))node.opacity=opacity;rubyOpacity.clear();}
  function display(label,translated){
@@ -169,8 +237,8 @@ function create({getEngine,nativeText}){
   if(!translated){restoreRuby();return;}
   for(const ruby of waku.ruby||[]){const node=ruby?.node;if(!valid(node))continue;if(!rubyOpacity.has(node))rubyOpacity.set(node,node.opacity);node.opacity=0;}
  }
- function dispose(){restoreRuby();for(const [owner,hook]of logHooks)for(const [key,wrapped,descriptor]of [['ShowSerif',hook.wrappedShow,hook.ownShow],['SetLog',hook.wrappedLog,hook.ownLog]])if(owner[key]===wrapped){if(descriptor)Object.defineProperty(owner,key,descriptor);else delete owner[key];}logHooks.clear();}
- return {bind,battleEvent,context,resultNames,excluded,allowInactive,titleSource,speakerSource,placeSource,localizeRecord,localizeDynamic,localizeManor,bookNumber,frame,pending,names,display,dispose};
+ function dispose(){preparedPage=null;currentDialogueScope=null;restoreRuby();for(const [owner,hook]of logHooks)for(const [key,wrapped,descriptor]of [['ShowSerif',hook.wrappedShow,hook.ownShow],['SetLog',hook.wrappedLog,hook.ownLog]])if(owner[key]===wrapped){if(descriptor)Object.defineProperty(owner,key,descriptor);else delete owner[key];}logHooks.clear();}
+ return {bind,battleEvent,context,resultNames,excluded,allowInactive,titleSource,speakerSource,placeSource,localizeRecord,localizeDynamic,localizeManor,bookNumber,dialogueScope,prepareDialogue,frame,pending,names,display,dispose};
 }
 window[KEY]=Object.freeze({create});
 })();
