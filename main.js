@@ -17,6 +17,7 @@ const game=window[Symbol.for('tamacolle-kor-game-adapter.v1')].create({getEngine
 const story=storyPolicy.create({getEngine:()=>engine,getRecords:()=>records,game});
 const images=globalThis[Symbol.for('tamacolle-kor-image-policy.v1')].create({getEngine:()=>engine,getConfig:()=>config,emit});
 const nativeTemplates=globalThis[Symbol.for('tamacolle-kor-native-template-policy.v1')].create({getEngine:()=>engine,game,dialogue,namesPolicy,getNames:()=>game.names(),onDialogueStart:dialogueStarted});
+const repeat=globalThis[Symbol.for('tamacolle-kor-auto-repeat.v1')].create({getEngine:()=>engine});
 function syncNative(label,r){const candidates=nativeTemplates.candidates(r.raw,r.context,label),provenance=JSON.stringify(candidates);if(r.nativeProvenance!==provenance){if(r.nativeProvenance!==undefined){reset(r);const old=translations.get(r.raw);if(old){translationBytes-=memorySize(r.raw,old);translations.delete(r.raw);}if(valid(label)&&actual(label)===r.display)display(label,r,r.native);}r.nativeProvenance=provenance;r.nativeTemplates=candidates;}return provenance;}
 const valid=x=>!!x&&(!window.cc?.isValid||window.cc.isValid(x));
 const candidate=text=>typeof text==='string'&&text.trim()&&text.length<=8192&&(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))||(config.translateLatin&&/[A-Za-z]/.test(text.replace(/<[^>]*>|\{[^{}]*\}/g,''))));
@@ -119,7 +120,7 @@ function dialogueStarted(label){
 }
 function restoreAll(){for(const [label,r]of records)if(valid(label))display(label,r,r.native);images.restore();}
 function status(){emit('STATUS',{status:{ready:!!engine,stopped,...images.status()}});}
-function fail(message){if(stopped)return;stopped=true;try{restoreAll();}catch{}emit('ERROR',{error:message});status();}
+function fail(message){if(stopped)return;stopped=true;try{repeat.configure(false);restoreAll();}catch{}emit('ERROR',{error:message});status();}
 function scheduleLight(){if(lightTimer||disposed||stopped||document.hidden||!config.enabled)return;lightTimer=setTimeout(()=>{lightTimer=null;lightCheck();},Math.max(0,64-(Date.now()-lastLight)));}
 function attach(){const cc=window.cc;if(!cc?.Label||!cc.RichText||!cc.director?.getScene)return false;
  const candidates=[];for(const Type of [cc.RichText,cc.Label]){let proto=Type.prototype;while(proto&&!Object.getOwnPropertyDescriptor(proto,'string'))proto=Object.getPrototypeOf(proto);const before=proto&&Object.getOwnPropertyDescriptor(proto,'string');if(!before?.get||!before?.set||!before.configurable)throw Error('Cocos 텍스트 접근자가 호환되지 않습니다.');if(!candidates.some(x=>x.proto===proto))candidates.push({proto,before});}
@@ -137,7 +138,7 @@ function refresh(){if(disposed||document.hidden||stopped)return;try{if(!engine&&
  for(const [label,r]of records)if(!seen.has(label)){if(valid(label))display(label,r,r.native);reset(r);records.delete(label);}images.end();status();
  }catch(e){fail('게임 엔진 구조가 호환되지 않습니다. 원문을 유지합니다.');}}
 function inputBurst(){if(disposed||document.hidden||stopped||!config.enabled)return;burstUntil=Date.now()+480;if(burstTimer)return;const run=()=>{burstTimer=null;if(disposed||document.hidden||stopped||!config.enabled)return;refresh();if(Date.now()<burstUntil)burstTimer=setTimeout(run,160);};burstTimer=setTimeout(run,Math.max(16,120-(Date.now()-lastScan)));}
-function tick(){heartbeat=null;if(disposed)return;nativeTemplates.refresh();if(!engine){attachAttempts++;refresh();}else if(config.enabled&&!document.hidden&&!stopped){lightCheck();if(Date.now()-lastScan>=650)refresh();}heartbeat=setTimeout(tick,engine?(config.enabled&&!document.hidden&&!stopped?64:750):(attachAttempts<30?100:1000));}
+function tick(){heartbeat=null;if(disposed)return;repeat.tick();nativeTemplates.refresh();if(!engine){attachAttempts++;refresh();}else if(config.enabled&&!document.hidden&&!stopped){lightCheck();if(Date.now()-lastScan>=650)refresh();}heartbeat=setTimeout(tick,engine?(config.enabled&&!document.hidden&&!stopped?64:750):(attachAttempts<30?100:1000));}
 function invalidate(){epoch++;clearMemory();for(const r of records.values())reset(r);}
 function onMessage(event){
  if(disposed||event.source!==window||event.origin!==location.origin)return;
@@ -154,6 +155,7 @@ function onMessage(event){
   const changed=m.generation!==bridgeGeneration||config.cacheEpoch!==catalogVersion||config.enabled!==(next.enabled===true);
   bridgeGeneration=m.generation;
   config={enabled:next.enabled===true,configured:next.configured===true,cacheEnabled:true,cacheOnly:true,target:'한국어',translateLatin:true,fontFamily:'Malgun Gothic',cacheEpoch:catalogVersion};
+  repeat.configure(config.enabled&&config.configured&&!stopped);
   if(changed){restoreAll();invalidate();}
   if(!config.enabled)restoreAll();
   refresh();if(config.enabled&&!document.hidden){clearTimeout(heartbeat);heartbeat=setTimeout(tick,64);}return;
@@ -181,6 +183,6 @@ function onMessage(event){
 function visibility(){if(disposed)return;if(!document.hidden){refresh();clearTimeout(heartbeat);heartbeat=setTimeout(tick,64);}}
 document.addEventListener?.('visibilitychange',visibility);
 window.addEventListener('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.addEventListener(event,inputBurst,{passive:true});
-window[APP]={refresh,dispose(){disposed=true;nativeTemplates.dispose();clearTimeout(heartbeat);clearTimeout(lightTimer);clearTimeout(burstTimer);restoreAll();images.dispose();game.dispose();for(const [event,fn]of engineEvents)try{engine.director.off(event,fn);}catch{}document.removeEventListener?.('visibilitychange',visibility);window.removeEventListener?.('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.removeEventListener?.(event,inputBurst);for(const h of hooks)if(Object.getOwnPropertyDescriptor(h.proto,'string')?.set===h.set)Object.defineProperty(h.proto,'string',h.before);records.clear();byRequest.clear();clearMemory();delete window[APP];}};
+window[APP]={refresh,repeatStatus:()=>repeat.status(),dispose(){disposed=true;repeat.dispose();nativeTemplates.dispose();clearTimeout(heartbeat);clearTimeout(lightTimer);clearTimeout(burstTimer);restoreAll();images.dispose();game.dispose();for(const [event,fn]of engineEvents)try{engine.director.off(event,fn);}catch{}document.removeEventListener?.('visibilitychange',visibility);window.removeEventListener?.('message',onMessage);for(const event of ['pointerup','touchend','keyup'])window.removeEventListener?.(event,inputBurst);for(const h of hooks)if(Object.getOwnPropertyDescriptor(h.proto,'string')?.set===h.set)Object.defineProperty(h.proto,'string',h.before);records.clear();byRequest.clear();clearMemory();delete window[APP];}};
 emit('HELLO');refresh();heartbeat=setTimeout(tick,engine?64:100);
 })();

@@ -37,7 +37,7 @@ function engineFixture(){
  const manager={kind:'GameManager',node:managerNode,GV:{play:{playerName:'ミナト'}}};managerNode._components.push(manager);
  const cc={Label,RichText,Sprite,Texture2D,SpriteFrame,rect:(x,y,width,height)=>({x,y,width,height}),isValid:value=>!!value&&!value.destroyed,director:{getScene:()=>scene},js:{getClassName:value=>value.kind||''}};
  h.window.cc=cc;Object.assign(h.context,{Image,document:{hidden:false,addEventListener(){},removeEventListener(){}}});
- for(const file of ['dialogue-text.js','name-policy.js','game-adapter.js','story-policy.js','image-policy.js','native-template-protocol.js','native-template-policy.js','main.js'])vm.runInContext(source(file),h.context,{filename:file});
+ for(const file of ['dialogue-text.js','name-policy.js','game-adapter.js','story-policy.js','image-policy.js','native-template-protocol.js','native-template-policy.js','auto-repeat.js','main.js'])vm.runInContext(source(file),h.context,{filename:file});
  const app=h.window[Symbol.for('tamacolle-kor.v1')];
  const bridge=(type,payload={})=>h.receive('bridge',type,payload);
  const config=(version,generation,enabled=true)=>bridge('CONFIG',{version,generation,config:{enabled,configured:true,cacheEpoch:version}});

@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: '22'
       - name: Test resource updates and live runtime behavior
-        run: node --test tests/resources.mjs tests/runtime.mjs tests/extension-update.mjs tests/crx.mjs
+        run: node --test tests/resources.mjs tests/runtime.mjs tests/extension-update.mjs tests/crx.mjs tests/auto-repeat.mjs
       - name: Build deterministic ZIP and signed Android CRX
         env:
           CRX_SIGNING_KEY: ${{ secrets.CRX_SIGNING_KEY }}
