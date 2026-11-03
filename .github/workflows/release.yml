@@ -9,13 +9,12 @@ on:
       resource_tag:
         description: Existing resource-vx.y.z tag to publish
         required: true
-        default: resource-v1.0.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.resource_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,19 +26,63 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Test resource updates and live runtime behavior
         run: node --test tests/resources.mjs tests/runtime.mjs tests/extension-update.mjs tests/crx.mjs tests/auto-repeat.mjs
-      - name: Build deterministic ZIP and signed Android CRX
+      - name: Determine whether the extension itself changed
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          for tag in "$previous" "$RELEASE_TAG"; do
+            if [[ ! "$tag" =~ ^resource-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo '::error::Only numeric resource-vx.y.z release tags are accepted.'
+              exit 1
+            fi
+          done
+          # Resources and development/docs files do not change the installed runtime.
+          if git diff --quiet "$previous" "$RELEASE_TAG" -- . \
+            ':(exclude)resources/ko.json' \
+            ':(exclude)README.md' ':(exclude)CHANGELOG.md' \
+            ':(exclude).github/**' ':(exclude)scripts/**' ':(exclude)tests/**' \
+            ':(exclude).gitignore' ':(exclude).gitattributes' ':(exclude).gitrepo'; then
+            extension=false
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then exit "$status"; fi
+            extension=true
+          fi
+          PREVIOUS_TAG="$previous" EXTENSION_CHANGED="$extension" node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          import {compareVersions} from './resource-pack.mjs';
+          const prefix = 'resource-v';
+          if (compareVersions(process.env.RELEASE_TAG.slice(prefix.length), process.env.PREVIOUS_TAG.slice(prefix.length)) <= 0) throw Error('The resource version must be newer than the latest published Release.');
+          if (process.env.EXTENSION_CHANGED === 'true') {
+            const previous = JSON.parse(execFileSync('git', ['show', process.env.PREVIOUS_TAG + ':manifest.json'], {encoding: 'utf8'}));
+            const current = JSON.parse(readFileSync('manifest.json', 'utf8'));
+            if (compareVersions(current.version, previous.version) <= 0) throw Error('Installed runtime files changed; increase manifest.version before publishing an extension update.');
+          }
+          NODE
+          printf 'extension=%s\n' "$extension" >> "$GITHUB_OUTPUT"
+      - name: Build Korean resources without reinstall packages
+        if: steps.scope.outputs.extension == 'false'
+        run: node scripts/build.mjs --tag "$RELEASE_TAG" --resources-only
+      - name: Build ZIP and signed Android CRX only for an extension change
+        if: steps.scope.outputs.extension == 'true'
         env:
           CRX_SIGNING_KEY: ${{ secrets.CRX_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -z "$CRX_SIGNING_KEY" ]; then
-            echo "::error::CRX_SIGNING_KEY must contain the existing private signing key before publishing."
+            echo '::error::CRX_SIGNING_KEY must contain the existing private signing key before publishing an extension update.'
             exit 1
           fi
           umask 077
@@ -47,16 +90,19 @@ jobs:
           trap 'rm -f "$key_file"' EXIT
           printf '%s' "$CRX_SIGNING_KEY" > "$key_file"
           node scripts/build.mjs --tag "$RELEASE_TAG" --crx-key "$key_file"
-      - name: Publish PC ZIP, Android CRX, resources and checksums
+      - name: Publish resources and checksums; include installers only when changed
         env:
           GH_TOKEN: ${{ github.token }}
+          EXTENSION_CHANGED: ${{ steps.scope.outputs.extension }}
         shell: bash
         run: |
-          gh release create "$RELEASE_TAG" \
-            dist/tamacolle-kor-*-extension.zip \
-            dist/tamacolle-kor-*-extension.crx \
-            dist/tamacolle-kor-resources.json \
-            dist/SHA256SUMS \
+          set -euo pipefail
+          assets=(dist/tamacolle-kor-resources.json dist/SHA256SUMS)
+          if [ "$EXTENSION_CHANGED" = true ]; then
+            assets+=(dist/tamacolle-kor-*-extension.zip dist/tamacolle-kor-*-extension.crx)
+          fi
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
             --verify-tag \
+            --latest \
             --title "한국어 리소스 ${RELEASE_TAG#resource-v}" \
             --notes-file ".github/release-notes/$RELEASE_TAG.md"

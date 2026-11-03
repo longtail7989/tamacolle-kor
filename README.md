@@ -4,9 +4,9 @@
 
 ## 다운로드·설치
 
-[최신 버전 다운로드](https://github.com/longtail7989/tamacolle-kor/releases/latest)
+[PC 설치 ZIP — 확장 0.1.9](https://github.com/longtail7989/tamacolle-kor/releases/download/resource-v1.1.11/tamacolle-kor-0.1.9-extension.zip)
 
-**PC에서는 최신 Release에서 `-extension.zip`으로 끝나는 파일만 받으면 됩니다.** 한글 데이터가 포함돼 있어 JSON 등 다른 파일을 따로 받을 필요가 없습니다.
+**PC에서는 위 ZIP 파일만 받으면 됩니다.** 한글 데이터가 포함돼 있어 JSON 등 다른 파일을 따로 받을 필요가 없습니다.
 
 1. ZIP을 고정된 폴더에 압축 해제합니다.
 2. Chrome은 `chrome://extensions`, Edge는 `edge://extensions`를 엽니다.
@@ -14,16 +14,17 @@
 4. 압축을 푼 폴더 중 **`manifest.json`이 있는 폴더**를 선택합니다.
 5. 다른 타마코레 번역 확장을 사용 중이라면 끕니다.
 6. 게임이 이미 열려 있다면 한 번 새로고침합니다.
+7. 확장 메뉴에서 **업데이트 확인**을 눌러 최신 번역을 받습니다.
 
 설치 폴더는 이후에도 삭제하거나 이동하지 마세요.
 
 ## Android Edge Canary — 시험 지원
 
-최신 Release의 **`-extension.crx`** 파일을 사용합니다. 기기·브라우저 버전에 따라 동작이 달라질 수 있는 **시험 지원**입니다. 일반 Edge 안정판과 iOS는 이 설치 안내의 지원 대상이 아닙니다.
+[Android 설치 CRX — 확장 0.1.9](https://github.com/longtail7989/tamacolle-kor/releases/download/resource-v1.1.11/tamacolle-kor-0.1.9-extension.crx)을 사용합니다. 기기·브라우저 버전에 따라 동작이 달라질 수 있는 **시험 지원**입니다. 일반 Edge 안정판과 iOS는 이 설치 안내의 지원 대상이 아닙니다.
 
 1. Android에 **Microsoft Edge Canary**를 설치합니다.
 2. `설정 → Edge 정보`에서 버전 번호를 반복해서 눌러 개발자 메뉴를 활성화합니다.
-3. [최신 Release](https://github.com/longtail7989/tamacolle-kor/releases/latest)에서 **`-extension.crx`로 끝나는 파일**을 휴대폰에 저장합니다. 압축을 풀거나 ZIP으로 바꾸지 않습니다.
+3. 위 CRX 다운로드 링크로 파일을 휴대폰에 저장합니다. 압축을 풀거나 ZIP으로 바꾸지 않습니다.
 4. 개발자 메뉴의 **Extension install by crx**에서 파일을 선택하고 표시되는 권한을 확인합니다.
 5. 확장 목록에서 **타마코레 한글화**가 켜져 있는지 확인합니다.
 6. **같은 Edge Canary에서** [게임](https://nijitama.app/games/tamacolle/index_20261026.html)을 열고 로그인합니다. 다른 타마코레 번역 확장은 끄고, 게임이 이미 열려 있었다면 새로고침합니다.
@@ -54,6 +55,7 @@
 - 새 번역은 **하루 단위로 자동 확인**합니다. 브라우저가 꺼져 있었다면 다시 실행한 뒤 확인합니다.
 - 바로 받고 싶으면 **업데이트 확인**을 누르세요. JSON을 직접 내려받거나 가져올 필요가 없습니다.
 - 받은 번역은 **게임 새로고침 없이** 텍스트와 이미지에 적용됩니다. 한글화가 Off라면 다음 On에 적용됩니다.
+- 번역만 바뀐 Release에는 설치 ZIP·CRX가 없을 수 있습니다. 기존 사용자는 확장을 재설치하지 않아도 됩니다. 처음 설치할 때는 위의 PC·Android 설치 링크를 사용하세요.
 - 확장의 새 버전이 있으면 아이콘의 **`!`**와 팝업의 **PC ZIP / Android CRX** 다운로드 링크로 안내합니다. PC는 새 ZIP으로 설치 폴더를 교체한 뒤 확장과 게임을 새로고침합니다. Android는 개발자 메뉴에서 새 CRX를 직접 설치한 뒤 게임을 새로고침합니다. 확장 코드는 자동 설치되지 않습니다.
 
 아직 번역되지 않은 문구와 일부 이미지는 원문으로 표시됩니다.

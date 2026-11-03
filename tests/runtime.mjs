@@ -109,6 +109,82 @@ test('terminal acquisition pages translate before typing ends without accepting 
  assert.equal(f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').item.source,f.waku.tmpserif);f.app.dispose();
 });
 
+test('multiline nonterminal acquisition pages request their complete page before native autotap',()=>{
+ const first='ボクは京の都を擁する畿内の山城どす。',continuation='\nふぅん、おまはんが声聞士なんや。';
+ const second='一見さんお断りやねんけど…まぁ、ボクが面倒みたるわ。\nそれが高貴たる者の責任やさかいな！　ふふん！';
+ const pages=[`text \n@山城\n${first},wait 4,text ${continuation},autotap`,`delay 3.0&flow,text \n@山城\n${second},autotap`,'text \n次のページ。,end'];
+ const f=nativeStoryFixture(pages),owner=f.scenario,full='\n'+first+continuation;
+ owner.Next=()=>assert.fail('read-only preparation must not advance the native scenario');
+ const index=createTextIndex({texts:[
+  {source:first+continuation.slice(1),text:'저는 수도 교토를 품은 기나이의 야마시로랍니다. 흐음, 그대가 성문사이시군요.'},
+  {source:second.replace('\n',''),text:'첫 방문은 사양하는 편이지만… 뭐, 내가 돌봐 주지. 고귀한 자의 책임이니까!　훗!'}
+ ]});
+ f.activate('1.0.0',1);owner.TextStart(first,'山城',true,false);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue'&&m.item.source===full)?.item;
+ assert.ok(request);const hit=lookupText(index,request);assert.ok(hit);
+ const count=f.waku.count;f.result('1.0.0',1,hit.id,hit.text,hit.cacheSource);
+ const translated='\n'+hit.text;assert.ok(translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ assert.equal(f.waku.tmpserif,'\n'+first);assert.equal(f.waku.count,count);assert.equal(owner.scenarioP,0);
+ owner.TextStart(continuation,'',false,false);assert.equal(f.serif.string,translated);assert.equal(f.waku.last,false);
+ assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.source===full).length,1);
+ owner.scenarioP=1;owner.TextStart(second,'山城',true,false);
+ const next=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue'&&m.item.source==='\n'+second)?.item;
+ assert.ok(next);const nextHit=lookupText(index,next);assert.ok(nextHit);f.result('1.0.0',1,nextHit.id,nextHit.text,nextHit.cacheSource);
+ assert.equal(f.serif.string,'\n'+nextHit.text);assert.equal(owner.scenarioP,1);assert.equal(f.waku.tmpserif,'\n'+second);f.app.dispose();
+});
+
+test('grouped delayed acquisition end prepares all fragments without running the end action',()=>{
+ const parts=['ご主人！　','ちょうど面白い遊び思いついたとこじゃ！','\n一緒に遊ぼうやぁ！'];
+ const f=nativeStoryFixture([`text \n@備後\n${parts[0]},wait 1.0,text ${parts[1]},wait 1.5,text ${parts[2]},delay 2.5&end`]),owner=f.scenario,full='\n'+parts.join('');
+ owner.Next=()=>assert.fail('preparation must not advance');owner.ScenarioEnd=()=>assert.fail('preparation must not end the scenario');
+ f.activate('1.0.0',1);owner.TextStart(parts[0],'備後',true,false);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue'&&m.item.source===full)?.item;
+ assert.ok(request);const translated='\n주인님!　마침 재미있는 놀이가 생각났어! 함께 놀자!';
+ f.result('1.0.0',1,request.id,translated,request.source);
+ assert.ok(translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ owner.TextStart(parts[1],'',false,false);assert.ok(translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ owner.TextStart(parts[2],'',false,false);assert.equal(f.serif.string,translated);assert.equal(f.waku.tmpserif,full);
+ assert.equal(f.waku.last,false);assert.equal(owner.scenarioP,0);f.app.dispose();
+});
+
+test('native standalone acquisition delay keeps early full-page lookup read-only',()=>{
+ const first='これ！　',rest='太い骨のおやつです！\nすっごくおいしいんです！';
+ const f=nativeStoryFixture([`delay 2.8&flow,text \n@播磨\n${first},delay 0.8,text ${rest},end`]),owner=f.scenario,full='\n'+first+rest;
+ f.activate('1.0.0',1);owner.TextStart(first,'播磨',true,false);
+ const request=f.messages.findLast(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue'&&m.item.source===full)?.item;
+ assert.ok(request);const translated='\n이거!　굵은 뼈 간식이에요! 정말 맛있어요!';
+ f.result('1.0.0',1,request.id,translated,request.source);assert.ok(translated.startsWith(f.serif.string));assert.notEqual(f.serif.string,translated);
+ assert.equal(f.waku.tmpserif,'\n'+first);assert.equal(owner.scenarioP,0);
+ owner.TextStart(rest,'',false,false);assert.equal(f.serif.string,translated);assert.equal(f.waku.tmpserif,full);f.app.dispose();
+});
+
+test('acquisition preparation rejects unknown commands, premature terminals and incomplete first-fragment matches',()=>{
+ for(const script of [
+  'text \n前半。,unknown,text 終わり。,autotap',
+  'text \n前半。,autotap,text 終わり。',
+  'text \n前半。,autotap unexpected',
+  'text \n前半。,delay -1,text 終わり。,autotap',
+  'text \n前半。,delay Infinity,text 終わり。,autotap',
+  'text \n前半。,delay ,text 終わり。,autotap',
+  'text \n前半。,delay unknown,text 終わり。,autotap',
+  'text \n前半。,delay -1&end',
+  'text \n前半。,delay 1&end,text 終わり。',
+  'text \n前半。,delay 1&end&flow',
+  'text \n前半。,delay 1&unknown&end'
+ ]){
+  const f=nativeStoryFixture([script,'text \n隣のページ。,end']);f.activate('1.0.0',1);
+  const before=f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length;
+  f.scenario.TextStart('前半。','',true,false);
+  assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length,before);
+  assert.equal(f.serif.string,'\n前半。');assert.equal(f.scenario.scenarioP,0);f.app.dispose();
+ }
+ const f=nativeStoryFixture(['text \n前半。,wait 1,text 終わり。,autotap']);f.activate('1.0.0',1);
+ const before=f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length;
+ f.scenario.TextStart('前','',true,false);
+ assert.equal(f.messages.filter(m=>m.type==='CANDIDATE'&&m.item.context==='TamacolleDialogue').length,before);f.app.dispose();
+});
+
+
 test('result names use approved individual lookups atomically, preserve rows and reject old teams or Off replies',()=>{
  const f=engineFixture(),controller=f.node('BattleManager',f.scene),original='\n大和\n\n山城\n',label=new f.cc.Label(f.node('kunitamaName',f.canvas),original),other=new f.cc.Label(f.node('other',f.canvas),original);
  label.node.width=64;label.node.x=100;label.node.anchorX=0.5;label.fontSize=32;label.lineHeight=95;label.horizontalAlign=1;label.enableWrapText=true;label.node.activeInHierarchy=false;

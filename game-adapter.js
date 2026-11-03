@@ -179,6 +179,11 @@ function create({getEngine,nativeText}){
        if(part+1>=group.length||!Number.isFinite(Number(group[part].slice(6)))||Number(group[part].slice(6))<0)return null;
        continue;
       }
+      // Native acquisition can end with delay & end; inspect, never run it.
+      if(head==='end'){
+       if(index!==commands.length-1||part!==group.length-1||group[part].toLowerCase()!=='end')return null;
+       continue;
+      }
       if(!pageCommands.has(head))return null;
      }
      continue;
@@ -191,7 +196,9 @@ function create({getEngine,nativeText}){
      if(chunks.length>128)return null;
     }else if(command){
      const head=command.split(' ')[0].toLowerCase();
-     if(head==='end'){if(index!==commands.length-1)return null;}
+     // AUTOTAP advances only after this page; it does not add following-page text.
+     if(head==='end'||head==='autotap'){if(index!==commands.length-1||command.toLowerCase()!==head)return null;}
+     else if(head==='delay'){const seconds=command.slice(6);if(!seconds||!Number.isFinite(Number(seconds))||Number(seconds)<0)return null;}
      else if(!pageCommands.has(head))return null;
     }
    }

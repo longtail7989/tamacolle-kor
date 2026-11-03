@@ -16,15 +16,17 @@ const files = [
   'popup.html', 'popup.js', 'popup.css', 'icons/icon16.png', 'icons/icon32.png',
   'icons/icon48.png', 'icons/icon128.png', 'resources/ko.json'
 ].sort();
-let tag, crxKeyPath;
-const usage = '사용법: node scripts/build.mjs [--tag resource-vX.Y.Z] [--crx-key /outside/repository/private-key.pem]';
+let tag, crxKeyPath, resourcesOnly = false;
+const usage = '사용법: node scripts/build.mjs [--tag resource-vX.Y.Z] [--resources-only | --crx-key /outside/repository/private-key.pem]';
 for (let i = 2; i < process.argv.length; i++) {
   const argument = process.argv[i], value = process.argv[i + 1];
+  if (argument === '--resources-only' && !resourcesOnly) { resourcesOnly = true; continue; }
   if (!value || value.startsWith('--')) throw Error(usage);
   if (argument === '--tag' && tag === undefined) tag = process.argv[++i];
   else if (argument === '--crx-key' && crxKeyPath === undefined) crxKeyPath = process.argv[++i];
   else throw Error(usage);
 }
+if (resourcesOnly && crxKeyPath !== undefined) throw Error('--resources-only에는 CRX 서명 키를 지정하지 않습니다.');
 
 function inside(directory, file) {
   const relative = path.relative(directory, file);
@@ -73,6 +75,17 @@ const declared = [
   ...(manifest.web_accessible_resources || []).flatMap(entry => entry.resources || [])
 ].filter(Boolean);
 for (const file of declared) if (!files.includes(file)) throw Error('manifest의 파일이 배포 허용 목록에 없습니다: ' + file);
+
+const resourceName = 'tamacolle-kor-resources.json';
+const checksum = (name, bytes) => createHash('sha256').update(bytes).digest('hex') + '  ' + name + '\n';
+const dist = path.join(root, 'dist');
+if (resourcesOnly) {
+  await mkdir(dist, {recursive: true});
+  await writeFile(path.join(dist, resourceName), resources);
+  await writeFile(path.join(dist, 'SHA256SUMS'), checksum(resourceName, resources));
+  console.log(`${resourceName}: ${resources.length} bytes, ${pack.texts.length} texts, ${pack.images.length} images, resource ${pack.version}\nSHA256SUMS\n리소스 전용: 확장 ZIP·CRX를 생성하지 않았습니다.`);
+  process.exit(0);
+}
 
 const crcTable = Uint32Array.from({length: 256}, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
@@ -126,9 +139,6 @@ const zipName = `tamacolle-kor-${manifest.version}-extension.zip`;
 const crxName = `tamacolle-kor-${manifest.version}-extension.crx`;
 // Complete signing and all key validation before creating any release artifacts.
 const crx = crxKey ? createCrx(zip, crxKey.pem) : null;
-const resourceName = 'tamacolle-kor-resources.json';
-const checksum = (name, bytes) => createHash('sha256').update(bytes).digest('hex') + '  ' + name + '\n';
-const dist = path.join(root, 'dist');
 await mkdir(dist, {recursive: true});
 await writeFile(path.join(dist, zipName), zip);
 await writeFile(path.join(dist, resourceName), resources);
